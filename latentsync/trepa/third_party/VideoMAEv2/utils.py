@@ -48,7 +48,8 @@ def load_videomae_model(device, ckpt_path=None, with_cp=False):
 
     if not os.path.exists(ckpt_path):
         # download the ckpt to the path
-        ckpt_url = "https://pjlab-gvm-data.oss-cn-shanghai.aliyuncs.com/internvideo/videomaev2/vit_g_hybrid_pt_1200e_ssv2_ft.pth"
+        print(f"Downloading checkpoint to {ckpt_path}...")
+        ckpt_url = "https://huggingface.co/ByteDance/LatentSync-1.6/resolve/main/auxiliary/vit_g_hybrid_pt_1200e_ssv2_ft.pth"
         response = requests.get(ckpt_url, stream=True, allow_redirects=True)
         total_size = int(response.headers.get("content-length", 0))
         block_size = 1024
