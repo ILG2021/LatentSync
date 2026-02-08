@@ -22,12 +22,10 @@ paths = []
 
 
 def gather_paths(input_dir, output_dir):
-    if not os.path.exists(input_dir):
-        return
     for video in sorted(os.listdir(input_dir)):
-        if video.lower().endswith((".mp4", ".mov")):
+        if video.endswith(".mp4"):
             video_input = os.path.join(input_dir, video)
-            video_output = os.path.join(output_dir, os.path.splitext(video)[0] + ".mp4")
+            video_output = os.path.join(output_dir, video)
             if os.path.isfile(video_output):
                 continue
             paths.append([video_input, video_output])
@@ -43,15 +41,10 @@ def get_video_fps(video_path: str):
 
 def resample_fps_hz(video_input, video_output):
     os.makedirs(os.path.dirname(video_output), exist_ok=True)
-    fps = get_video_fps(video_input)
-    ext = os.path.splitext(video_input)[1].lower()
-
-    if fps == 25 and ext == ".mp4":
+    if get_video_fps(video_input) == 25:
         command = f"ffmpeg -loglevel error -y -i {video_input} -c:v copy -ar 16000 -q:a 0 {video_output}"
     else:
-        # Use libx264 for compatibility and ensure 25fps and 16000Hz audio
-        command = f'ffmpeg -loglevel error -y -i "{video_input}" -vf "fps=25" -c:v libx264 -crf 18 -ar 16000 -c:a aac -q:a 0 "{video_output}"'
-    
+        command = f"ffmpeg -loglevel error -y -i {video_input} -r 25 -ar 16000 -q:a 0 {video_output}"
     subprocess.run(command, shell=True)
 
 

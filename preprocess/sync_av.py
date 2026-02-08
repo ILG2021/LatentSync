@@ -27,14 +27,11 @@ paths = []
 
 def gather_paths(input_dir, output_dir):
     # os.makedirs(output_dir, exist_ok=True)
-    if not os.path.exists(input_dir):
-        return
 
     for video in tqdm.tqdm(sorted(os.listdir(input_dir))):
-        if video.lower().endswith((".mp4", ".mov")):
+        if video.endswith(".mp4"):
             video_input = os.path.join(input_dir, video)
-            # Ensure output is .mp4
-            video_output = os.path.join(output_dir, os.path.splitext(video)[0] + ".mp4")
+            video_output = os.path.join(output_dir, video)
             if os.path.isfile(video_output):
                 continue
             paths.append((video_input, video_output))
