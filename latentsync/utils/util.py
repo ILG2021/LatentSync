@@ -43,7 +43,7 @@ def read_json(filepath: str):
     return json_dict
 
 
-def read_video(video_path: str, change_fps=True, use_decord=True):
+def read_video(video_path: str, change_fps=True, use_decord=True, load_frames=True):
     if change_fps:
         temp_dir = "temp"
         if os.path.exists(temp_dir):
@@ -56,6 +56,9 @@ def read_video(video_path: str, change_fps=True, use_decord=True):
         target_video_path = os.path.join(temp_dir, "video.mp4")
     else:
         target_video_path = video_path
+
+    if not load_frames:
+        return target_video_path
 
     if use_decord:
         return read_video_decord(target_video_path)
