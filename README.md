@@ -145,13 +145,21 @@ The complete data processing pipeline includes the following steps:
 6. Remove videos with [sync confidence score](https://www.robots.ox.ac.uk/~vgg/publications/2016/Chung16a/chung16a.pdf) lower than 3, and adjust the audio-visual offset to 0.
 7. Calculate [hyperIQA](https://openaccess.thecvf.com/content_CVPR_2020/papers/Su_Blindly_Assess_Image_Quality_in_the_Wild_Guided_by_a_CVPR_2020_paper.pdf) score, and remove videos with scores lower than 40.
 
-Run the script to execute the data processing pipeline:
+First, put your videos in the `my_data` directory.
+
+Then run the script to execute the data processing pipeline:
 
 ```bash
 ./data_processing_pipeline.sh
 ```
 
-You should change the parameter `input_dir` in the script to specify the data directory to be processed. The processed videos will be saved in the `high_visual_quality` directory. Each step will generate a new directory to prevent the need to redo the entire pipeline in case the process is interrupted by an unexpected error.
+The processed videos will be saved in the `high_visual_quality` directory. Each step will generate a new directory to prevent the need to redo the entire pipeline in case the process is interrupted by an unexpected error.
+
+Then generate file list for training:
+
+```bash
+python tools/write_fileslist.py
+```
 
 ## 🏋️‍♂️ Training U-Net
 

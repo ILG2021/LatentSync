@@ -6,4 +6,4 @@ python -m preprocess.data_processing_pipeline \
     --resolution 256 \
     --sync_conf_threshold 3 \
     --temp_dir temp \
-    --input_dir /mnt/bn/maliva-gen-ai-v2/chunyu.li/VoxCeleb2/raw
+    --input_dir my_data
