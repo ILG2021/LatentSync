@@ -16,7 +16,7 @@ import os
 import subprocess
 import tqdm
 from multiprocessing import Pool
-import cv2
+import shutil
 
 paths = []
 
@@ -33,10 +33,28 @@ def gather_paths(input_dir, output_dir):
             gather_paths(os.path.join(input_dir, video), os.path.join(output_dir, video))
 
 
-def get_video_fps(video_path: str):
-    cam = cv2.VideoCapture(video_path)
-    fps = cam.get(cv2.CAP_PROP_FPS)
-    return fps
+def get_video_audio_info(video_path):
+    video_input_fixed = video_path.replace("\\", "/")
+    # Get FPS
+    fps_command = f'ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of default=noprint_wrappers=1:nokey=1 "{video_input_fixed}"'
+    try:
+        fps_raw = subprocess.check_output(fps_command, shell=True).decode('utf-8').strip()
+        if '/' in fps_raw:
+            num, den = fps_raw.split('/')
+            fps = float(num) / float(den) if float(den) != 0 else 0
+        else:
+            fps = float(fps_raw) if fps_raw else 0
+    except Exception:
+        fps = 0
+
+    # Get Sample Rate
+    sr_command = f'ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=noprint_wrappers=1:nokey=1 "{video_input_fixed}"'
+    try:
+        sample_rate = int(subprocess.check_output(sr_command, shell=True).decode('utf-8').strip())
+    except Exception:
+        sample_rate = 0
+    
+    return fps, sample_rate
 
 
 def resample_fps_hz(video_input, video_output):
@@ -44,8 +62,16 @@ def resample_fps_hz(video_input, video_output):
     video_input_fixed = video_input.replace("\\", "/")
     video_output_fixed = video_output.replace("\\", "/")
     
-    # Force re-encoding to libx264 to ensure the video stream is healthy and compatible
-    command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
+    fps, sr = get_video_audio_info(video_input)
+    
+    # Check if already 25 FPS and 16000 Hz
+    if round(fps) == 25 and sr == 16000:
+        print(f"Skipping {video_input} (already 25fps, 16kHz)")
+        shutil.copy(video_input, video_output)
+        return
+
+    # Use loglevel info to show progress
+    command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
     subprocess.run(command, shell=True)
 
 

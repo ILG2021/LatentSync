@@ -40,8 +40,8 @@ def detect_shot(video_input, output_dir):
     video_input_fixed = video_input.replace("\\", "/")
     output_dir_fixed = output_dir.replace("\\", "/")
     
-    # Use --high-quality instead of --copy for reliable splitting on Windows
-    command = f'scenedetect --quiet -i "{video_input_fixed}" detect-adaptive --threshold 2 split-video --high-quality --filename "{video}_shot_$SCENE_NUMBER" --output "{output_dir_fixed}"'
+    # Removed --quiet and used --high-quality for progress visibility and reliability
+    command = f'scenedetect -i "{video_input_fixed}" detect-adaptive --threshold 2 split-video --high-quality --filename "{video}_shot_$SCENE_NUMBER" --output "{output_dir_fixed}"'
     subprocess.run(command, shell=True)
 
 

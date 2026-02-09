@@ -45,7 +45,7 @@ def convert_mov_to_mp4(mov_path):
     # -preset slow: better quality/size ratio
     # -c:a aac -b:a 192k: high quality audio
     # -loglevel error: only show errors
-    command = f'ffmpeg -y -i "{mov_path}" -c:v libx264 -crf 18 -preset slow -c:a aac -b:a 192k -strict experimental -loglevel error "{mp4_path}"'
+    command = f'ffmpeg -y -i "{mov_path}" -c:v libx264 -crf 18 -preset slow -c:a aac -b:a 192k -strict experimental -loglevel info "{mp4_path}"'
     try:
         subprocess.run(command, shell=True, check=True)
         # If successful, remove the original mov file
