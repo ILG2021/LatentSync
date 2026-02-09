@@ -58,9 +58,13 @@ def resample_fps_hz_multiprocessing(input_dir, output_dir, num_workers):
     gather_paths(input_dir, output_dir)
 
     print(f"Resampling FPS and Hz of {input_dir} ...")
-    with Pool(num_workers) as pool:
-        for _ in tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, paths), total=len(paths)):
-            pass
+    if num_workers > 1:
+        with Pool(num_workers) as pool:
+            for _ in tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, paths), total=len(paths)):
+                pass
+    else:
+        for args in tqdm.tqdm(paths):
+            resample_fps_hz(*args)
 
 
 if __name__ == "__main__":

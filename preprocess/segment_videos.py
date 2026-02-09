@@ -50,9 +50,13 @@ def segment_videos_multiprocessing(input_dir, output_dir, num_workers):
     gather_paths(input_dir, output_dir)
 
     print(f"Segmenting videos of {input_dir} ...")
-    with Pool(num_workers) as pool:
-        for _ in tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, paths), total=len(paths)):
-            pass
+    if num_workers > 1:
+        with Pool(num_workers) as pool:
+            for _ in tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, paths), total=len(paths)):
+                pass
+    else:
+        for args in tqdm.tqdm(paths):
+            segment_video(*args)
 
 
 if __name__ == "__main__":
