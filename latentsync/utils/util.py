@@ -277,10 +277,12 @@ def check_ffmpeg_installed():
         raise FileNotFoundError("ffmpeg not found, please install it by:\n    $ conda install -c conda-forge ffmpeg")
 
 
-def check_model_and_download(ckpt_path: str, huggingface_model_id: str = "ByteDance/LatentSync-1.5"):
+def check_model_and_download(ckpt_path: str, huggingface_model_id: str = "ByteDance/LatentSync-1.6"):
     if not os.path.exists(ckpt_path):
         ckpt_path_obj = Path(ckpt_path)
-        download_cmd = f"huggingface-cli download {huggingface_model_id} {Path(*ckpt_path_obj.parts[1:])} --local-dir {Path(ckpt_path_obj.parts[0])}"
+        repo_path = Path(*ckpt_path_obj.parts[1:]).as_posix()
+        local_dir = ckpt_path_obj.parts[0]
+        download_cmd = f"huggingface-cli download {huggingface_model_id} {repo_path} --local-dir {local_dir}"
         subprocess.run(download_cmd, shell=True)
 
 
