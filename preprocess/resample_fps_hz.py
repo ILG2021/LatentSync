@@ -44,10 +44,8 @@ def resample_fps_hz(video_input, video_output):
     video_input_fixed = video_input.replace("\\", "/")
     video_output_fixed = video_output.replace("\\", "/")
     
-    if get_video_fps(video_input) == 25:
-        command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -c:v copy -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
-    else:
-        command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -r 25 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
+    # Force re-encoding to libx264 to ensure the video stream is healthy and compatible
+    command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
     subprocess.run(command, shell=True)
 
 

@@ -34,11 +34,14 @@ def gather_paths(input_dir, output_dir):
 
 def detect_shot(video_input, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    video = os.path.basename(video_input)[:-4]
-    # Use forward slashes for cross-platform compatibility with CLI tools
+    # Get filename without extension and remove any potential problematic quotes
+    video = os.path.splitext(os.path.basename(video_input))[0].replace("'", "").replace('"', "")
+    
     video_input_fixed = video_input.replace("\\", "/")
     output_dir_fixed = output_dir.replace("\\", "/")
-    command = f'scenedetect --quiet -i "{video_input_fixed}" detect-adaptive --threshold 2 split-video --copy --filename "{video}_shot_$SCENE_NUMBER" --output "{output_dir_fixed}"'
+    
+    # Use --high-quality instead of --copy for reliable splitting on Windows
+    command = f'scenedetect --quiet -i "{video_input_fixed}" detect-adaptive --threshold 2 split-video --high-quality --filename "{video}_shot_$SCENE_NUMBER" --output "{output_dir_fixed}"'
     subprocess.run(command, shell=True)
 
 
