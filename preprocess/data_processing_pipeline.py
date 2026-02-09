@@ -58,7 +58,7 @@ def data_processing_pipeline(
 
     print("Affine transforming videos...")
     affine_transformed_dir = os.path.join(os.path.dirname(input_dir), "affine_transformed")
-    affine_transform_multi_gpus(segmented_dir, affine_transformed_dir, temp_dir, resolution, per_gpu_num_workers // 2)
+    affine_transform_multi_gpus(segmented_dir, affine_transformed_dir, temp_dir, resolution, max(1, per_gpu_num_workers // 2))
 
     # print("Removing incorrect affined videos...")
     # remove_incorrect_affined_multiprocessing(affine_transformed_dir, total_num_workers)
