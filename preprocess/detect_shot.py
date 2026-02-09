@@ -40,9 +40,14 @@ def detect_shot(video_input, output_dir):
     video_input_fixed = video_input.replace("\\", "/")
     output_dir_fixed = output_dir.replace("\\", "/")
     
-    # Removed --quiet and used --high-quality for progress visibility and reliability
+    # Use --high-quality instead of --copy for reliable splitting on Windows
     command = f'scenedetect -i "{video_input_fixed}" detect-adaptive --threshold 2 split-video --high-quality --filename "{video}_shot_$SCENE_NUMBER" --output "{output_dir_fixed}"'
-    subprocess.run(command, shell=True)
+    try:
+        subprocess.run(command, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error splitting video {video_input}: {e}")
+        # If it fails, the file might still be corrupted, we don't want to stop the whole pipeline
+        pass
 
 
 def multi_run_wrapper(args):

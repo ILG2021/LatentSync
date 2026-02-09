@@ -64,10 +64,12 @@ def resample_fps_hz(video_input, video_output):
     
     fps, sr = get_video_audio_info(video_input)
     
-    # Check if already 25 FPS and 16000 Hz
+    # Even if parameters match, we use ffmpeg to 'clean' the streams (strip metadata/broken streams)
     if round(fps) == 25 and sr == 16000:
-        print(f"Skipping {video_input} (already 25fps, 16kHz)")
-        shutil.copy(video_input, video_output)
+        print(f"Cleaning streams for {video_input} (already 25fps, 16kHz)")
+        # Use -c copy with mapping to strip problematic extra streams while keeping it fast
+        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v -map 0:a? -c copy "{video_output_fixed}"'
+        subprocess.run(command, shell=True)
         return
 
     # Use loglevel info to show progress. 
