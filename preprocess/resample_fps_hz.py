@@ -70,8 +70,9 @@ def resample_fps_hz(video_input, video_output):
         shutil.copy(video_input, video_output)
         return
 
-    # Use loglevel info to show progress
-    command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
+    # Use loglevel info to show progress. 
+    # Use -map 0:v -map 0:a? to only include video and audio, ignoring problematic metadata/data streams.
+    command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v -map 0:a? -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
     subprocess.run(command, shell=True)
 
 

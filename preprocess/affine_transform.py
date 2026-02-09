@@ -42,7 +42,8 @@ def combine_video_audio(video_frames, video_input_path, video_output_path, proce
 
     write_video(video_temp, video_frames, fps=25)
 
-    command = f'ffmpeg -y -loglevel info -i "{video_input_path}" -q:a 0 -map a "{audio_temp}"'
+    # Explicitly map audio stream to avoid issues with other metadata streams
+    command = f'ffmpeg -y -loglevel info -i "{video_input_path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "{audio_temp}"'
     subprocess.run(command, shell=True)
 
     os.makedirs(os.path.dirname(video_output_path), exist_ok=True)
