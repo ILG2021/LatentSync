@@ -35,7 +35,9 @@ def gather_paths(input_dir, output_dir):
 
 def segment_video(video_input, video_output):
     os.makedirs(os.path.dirname(video_output), exist_ok=True)
-    command = f'ffmpeg -loglevel error -y -i "{video_input}" -map 0 -c:v copy -segment_time 5 -f segment -reset_timestamps 1 -q:a 0 "{video_output}"'
+    video_input_fixed = video_input.replace("\\", "/")
+    video_output_fixed = video_output.replace("\\", "/")
+    command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -map 0 -c:v copy -segment_time 5 -f segment -reset_timestamps 1 -q:a 0 "{video_output_fixed}"'
     subprocess.run(command, shell=True)
 
 

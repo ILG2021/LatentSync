@@ -41,10 +41,13 @@ def get_video_fps(video_path: str):
 
 def resample_fps_hz(video_input, video_output):
     os.makedirs(os.path.dirname(video_output), exist_ok=True)
+    video_input_fixed = video_input.replace("\\", "/")
+    video_output_fixed = video_output.replace("\\", "/")
+    
     if get_video_fps(video_input) == 25:
-        command = f'ffmpeg -loglevel error -y -i "{video_input}" -c:v copy -ar 16000 -q:a 0 "{video_output}"'
+        command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -c:v copy -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
     else:
-        command = f'ffmpeg -loglevel error -y -i "{video_input}" -r 25 -ar 16000 -q:a 0 "{video_output}"'
+        command = f'ffmpeg -loglevel error -y -i "{video_input_fixed}" -r 25 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
     subprocess.run(command, shell=True)
 
 
