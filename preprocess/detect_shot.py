@@ -46,8 +46,7 @@ def detect_shot(video_input, output_dir):
         subprocess.run(command, shell=True, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error splitting video {video_input}: {e}")
-        # If it fails, the file might still be corrupted, we don't want to stop the whole pipeline
-        pass
+        raise RuntimeError(f"SceneDetect failed for {video_input}. The input file might still contain invalid streams.")
 
 
 def multi_run_wrapper(args):

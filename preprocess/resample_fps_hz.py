@@ -64,18 +64,20 @@ def resample_fps_hz(video_input, video_output):
     
     fps, sr = get_video_audio_info(video_input)
     
-    # Even if parameters match, we use ffmpeg to 'clean' the streams (strip metadata/broken streams)
+    # We ALWAYS use ffmpeg to 'clean' the streams to strip broken metadata/timecode streams
+    # Even if FPS/SR match, we MUST re-mux to remove the 'codec none' stream that breaks scenedetect
     if round(fps) == 25 and sr == 16000:
-        print(f"Cleaning streams for {video_input} (already 25fps, 16kHz)")
-        # Use -c copy with mapping to strip problematic extra streams while keeping it fast
-        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v -map 0:a? -c copy "{video_output_fixed}"'
-        subprocess.run(command, shell=True)
-        return
-
-    # Use loglevel info to show progress. 
-    # Use -map 0:v -map 0:a? to only include video and audio, ignoring problematic metadata/data streams.
-    command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v -map 0:a? -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 "{video_output_fixed}"'
-    subprocess.run(command, shell=True)
+        print(f"Cleaning streams for {video_input}...")
+        # -map 0:v:0 -map 0:a:0? : Only take first video and first audio stream
+        # -sn -dn -map_metadata -1 : Strip subtitles, data streams, and all metadata
+        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -c copy -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
+    else:
+        print(f"Resampling/Re-encoding {video_input}...")
+        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
+    
+    result = subprocess.run(command, shell=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed with exit code {result.returncode} for file {video_input}")
 
 
 def multi_run_wrapper(args):
