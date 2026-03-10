@@ -6,6 +6,7 @@ import os
 import shutil
 from typing import Callable, List, Optional, Union
 import subprocess
+import gc
 
 import numpy as np
 import torch
@@ -387,7 +388,10 @@ class LipsyncPipeline(DiffusionPipeline):
 
         audio_samples = read_audio(audio_path)
         video_path_25fps = read_video(video_path, use_decord=False, load_frames=False)
-        video_frames = LoopedVideoFrames(video_path_25fps, list(range(len(decord.VideoReader(video_path_25fps)))))
+        vr_temp = decord.VideoReader(video_path_25fps)
+        num_frames_total = len(vr_temp)
+        del vr_temp
+        video_frames = LoopedVideoFrames(video_path_25fps, list(range(num_frames_total)))
 
         video_frames, faces, boxes, affine_matrices = self.loop_video(whisper_chunks, video_frames)
 
@@ -488,6 +492,13 @@ class LipsyncPipeline(DiffusionPipeline):
 
         if is_train:
             self.unet.train()
+
+        # Release decord VideoReader file handles before deleting temp dir (Windows file lock)
+        if hasattr(video_frames, '_vr') and video_frames._vr is not None:
+            del video_frames._vr
+            video_frames._vr = None
+        del video_frames
+        gc.collect()
 
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
