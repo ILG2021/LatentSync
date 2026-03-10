@@ -493,20 +493,24 @@ class LipsyncPipeline(DiffusionPipeline):
         if is_train:
             self.unet.train()
 
-        # Release decord VideoReader file handles before deleting temp dir (Windows file lock)
+
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+
+        out_video_path = os.path.join(temp_dir, "out_video.mp4")
+        out_audio_path = os.path.join(temp_dir, "audio.wav")
+
+        write_video(out_video_path, synced_video_frames, fps=video_fps)
+
+        sf.write(out_audio_path, audio_samples, audio_sample_rate)
+
+        # Quote paths to handle spaces in file paths (Windows/Gradio temp paths)
+        command = f'ffmpeg -y -loglevel error -nostdin -i "{out_video_path}" -i "{out_audio_path}" -c:v libx264 -crf 18 -c:a aac -q:v 0 -q:a 0 "{video_out_path}"'
+        subprocess.run(command, shell=True)
+
+        # Release decord VideoReader file handles to avoid locking temp\video.mp4 for the next run (Windows file lock)
         if hasattr(video_frames, '_vr') and video_frames._vr is not None:
             del video_frames._vr
             video_frames._vr = None
         del video_frames
         gc.collect()
-
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        os.makedirs(temp_dir, exist_ok=True)
-
-        write_video(os.path.join(temp_dir, "video.mp4"), synced_video_frames, fps=video_fps)
-
-        sf.write(os.path.join(temp_dir, "audio.wav"), audio_samples, audio_sample_rate)
-
-        command = f'ffmpeg -y -loglevel error -nostdin -i "{os.path.join(temp_dir, "video.mp4")}" -i "{os.path.join(temp_dir, "audio.wav")}" -c:v libx264 -crf 18 -c:a aac -q:v 0 -q:a 0 "{video_out_path}"'
-        subprocess.run(command, shell=True)
