@@ -29,7 +29,7 @@ class FileslistWriter:
         print(f"Gathering videos from: {dataset_dir}")
         video_paths = gather_video_paths_recursively(dataset_dir)
         
-        with open(self.fileslist_path, "w") as f:
+        with open(self.fileslist_path, "w", encoding='utf-8') as f:
             for video_path in tqdm(video_paths):
                 if exclude_path and os.path.abspath(video_path) == os.path.abspath(exclude_path):
                     continue
@@ -38,7 +38,7 @@ class FileslistWriter:
 
 
 def update_unet_config(config_path, val_video_path):
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
     if "data" not in config:
@@ -47,7 +47,7 @@ def update_unet_config(config_path, val_video_path):
     config["data"]["val_video_path"] = val_video_path
     config["data"]["val_audio_path"] = val_video_path
 
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding='utf-8') as f:
         yaml.dump(config, f, default_flow_style=False)
     print(f"Successfully updated {config_path} with a random video as validation target.")
 
@@ -55,7 +55,7 @@ def update_unet_config(config_path, val_video_path):
 if __name__ == "__main__":
     fileslist_path = "my_data/fileslist.txt"
     unet_config_path = "configs/unet/stage1_512.yaml"
-    dataset_dir = "high_visual_quality"
+    dataset_dir = "my_data/high_visual_quality"
 
     # 1. 扫描所有视频获取候选列表
     all_video_paths = gather_video_paths_recursively(dataset_dir)

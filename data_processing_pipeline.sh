@@ -6,4 +6,4 @@ python -m preprocess.data_processing_pipeline \
     --resolution 512 \
     --sync_conf_threshold 3 \
     --temp_dir temp \
-    --input_dir my_data
+    --input_dir my_data/raw

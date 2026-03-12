@@ -256,7 +256,7 @@ def gather_video_paths_recursively(input_dir):
 def gather_video_paths(input_dir, paths):
     for file in sorted(os.listdir(input_dir)):
         if file.endswith(".mp4"):
-            filepath = os.path.join(input_dir, file)
+            filepath = os.path.join(input_dir, file).replace("\\", "/")
             paths.append(filepath)
         elif os.path.isdir(os.path.join(input_dir, file)):
             gather_video_paths(os.path.join(input_dir, file), paths)

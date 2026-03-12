@@ -14,6 +14,8 @@
 
 import argparse
 import os
+import shutil
+
 def data_processing_pipeline(
     total_num_workers, per_gpu_num_workers, resolution, sync_conf_threshold, temp_dir, input_dir
 ):
@@ -45,7 +47,9 @@ def data_processing_pipeline(
 
     print("Detecting shot...")
     shot_dir = os.path.join(os.path.dirname(input_dir), "shot")
-    detect_shot_multiprocessing(resampled_dir, shot_dir, total_num_workers)
+    print("shot_dir", shot_dir)
+    # detect_shot_multiprocessing(resampled_dir, shot_dir, total_num_workers)
+    shutil.copytree(resampled_dir, shot_dir)
 
     print("Segmenting videos...")
     segmented_dir = os.path.join(os.path.dirname(input_dir), "segmented")
@@ -65,12 +69,13 @@ def data_processing_pipeline(
 
     print("Syncing audio and video...")
     av_synced_dir = os.path.join(os.path.dirname(input_dir), f"av_synced_{sync_conf_threshold}")
-    sync_av_multi_gpus(affine_transformed_dir, av_synced_dir, temp_dir, per_gpu_num_workers, sync_conf_threshold)
+    # sync_av_multi_gpus(affine_transformed_dir, av_synced_dir, temp_dir, per_gpu_num_workers, sync_conf_threshold)
+    shutil.copytree(affine_transformed_dir, av_synced_dir)
 
     print("Filtering visual quality...")
     high_visual_quality_dir = os.path.join(os.path.dirname(input_dir), "high_visual_quality")
-    filter_visual_quality_multi_gpus(av_synced_dir, high_visual_quality_dir, per_gpu_num_workers)
-
+    # filter_visual_quality_multi_gpus(av_synced_dir, high_visual_quality_dir, per_gpu_num_workers)
+    shutil.copytree(av_synced_dir, high_visual_quality_dir)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
