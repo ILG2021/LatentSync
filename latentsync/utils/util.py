@@ -119,7 +119,7 @@ def write_video(video_output_path: str, video_frames: np.ndarray, fps: int):
     with imageio.get_writer(
         video_output_path,
         fps=fps,
-        codec="libx264",
+        codec="h264",
         macro_block_size=None,
         ffmpeg_params=["-crf", "13"],
         ffmpeg_log_level="error",
