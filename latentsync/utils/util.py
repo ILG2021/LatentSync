@@ -121,7 +121,8 @@ def write_video(video_output_path: str, video_frames: np.ndarray, fps: int):
         fps=fps,
         codec="h264",
         macro_block_size=None,
-        ffmpeg_params=["-crf", "13"],
+        quality=10,
+        ffmpeg_params=["-b:v", "10M"],
         ffmpeg_log_level="error",
     ) as writer:
         for video_frame in video_frames:

@@ -505,7 +505,7 @@ class LipsyncPipeline(DiffusionPipeline):
         sf.write(out_audio_path, audio_samples, audio_sample_rate)
 
         # Quote paths to handle spaces in file paths (Windows/Gradio temp paths)
-        command = f'ffmpeg -y -loglevel error -nostdin -i "{out_video_path}" -i "{out_audio_path}" -c:v h264 -crf 18 -c:a aac -q:v 0 -q:a 0 "{video_out_path}"'
+        command = f'ffmpeg -y -loglevel error -nostdin -i "{out_video_path}" -i "{out_audio_path}" -c:v copy -c:a aac -q:a 0 "{video_out_path}"'
         subprocess.run(command, shell=True)
 
         # Release decord VideoReader file handles to avoid locking temp\video.mp4 for the next run (Windows file lock)
