@@ -5,11 +5,25 @@ import json
 import subprocess
 import sys
 import time
+import wave
 from pathlib import Path
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+
+
+def audio_duration_seconds(path: Path) -> float:
+    """Read duration without loading the audio into memory."""
+    if path.suffix.lower() == ".wav":
+        with wave.open(str(path), "rb") as wav:
+            return wav.getnframes() / wav.getframerate()
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(probe.stdout.strip())
 
 
 def main():
@@ -35,7 +49,8 @@ def main():
         raise SystemExit(f"No matching audio/video pairs found in {input_dir}")
 
     rows = []
-    batch_started = time.perf_counter()
+    successful_runtime = 0.0
+    successful_audio_duration = 0.0
     for stem in pairs:
         metrics_path = output_dir / f".{stem}.metrics.json"
         output_path = output_dir / f"{stem}_lipsync.mp4"
@@ -56,17 +71,24 @@ def main():
             continue
         metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         metrics_path.unlink(missing_ok=True)
-        rows.append({"case": stem, "status": "success", **metrics})
+        duration = audio_duration_seconds(audio[stem])
+        successful_runtime += float(metrics["elapsed_seconds"])
+        successful_audio_duration += duration
+        rows.append({"case": stem, "status": "success", "audio_duration_seconds": duration, **metrics})
 
-    total_seconds = time.perf_counter() - batch_started
     report = output_dir / "batch_report.csv"
-    fields = ["case", "status", "elapsed_seconds", "peak_vram_mb", "video_out_path", "error_code"]
+    fields = ["case", "status", "audio_duration_seconds", "elapsed_seconds", "peak_vram_mb", "video_out_path", "error_code"]
     with report.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-    peak = max((float(r.get("peak_vram_mb", 0)) for r in rows), default=0)
-    print(f"总运行时长: {total_seconds:.2f} 秒")
+    successful_rows = [r for r in rows if r["status"] == "success"]
+    peak = max((float(r["peak_vram_mb"]) for r in successful_rows), default=0)
+    ratio = successful_runtime / successful_audio_duration if successful_audio_duration else 0
+    print(f"成功样本数: {len(successful_rows)}/{len(rows)}")
+    print(f"成功样本总运行时长: {successful_runtime:.2f} 秒")
+    print(f"成功样本音频总时长: {successful_audio_duration:.2f} 秒")
+    print(f"总运行时长 / 对齐音频时长: {ratio:.4f}")
     print(f"峰值 VRAM: {peak:.2f} MB")
     print(f"报告: {report}")
 
