@@ -14,6 +14,8 @@
 
 import argparse
 import os
+import json
+import time
 from omegaconf import OmegaConf
 import torch
 from diffusers import AutoencoderKL, DDIMScheduler
@@ -86,6 +88,9 @@ def main(config, args):
 
     print(f"Initial seed: {torch.initial_seed()}")
 
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    started_at = time.perf_counter()
     pipeline(
         video_path=args.video_path,
         audio_path=args.audio_path,
@@ -99,6 +104,18 @@ def main(config, args):
         mask_image_path=config.data.mask_image_path,
         temp_dir=args.temp_dir,
     )
+    elapsed_seconds = time.perf_counter() - started_at
+    peak_vram_bytes = torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
+    metrics = {
+        "elapsed_seconds": elapsed_seconds,
+        "peak_vram_mb": peak_vram_bytes / (1024 ** 2),
+        "video_out_path": os.path.abspath(args.video_out_path),
+    }
+    print("INFERENCE_METRICS=" + json.dumps(metrics, ensure_ascii=False))
+    if args.metrics_json:
+        with open(args.metrics_json, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+    return metrics
 
 
 if __name__ == "__main__":
@@ -113,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--temp_dir", type=str, default="temp")
     parser.add_argument("--seed", type=int, default=1247)
     parser.add_argument("--enable_deepcache", action="store_true")
+    parser.add_argument("--metrics_json", type=str, default="")
     args = parser.parse_args()
 
     config = OmegaConf.load(args.unet_config_path)

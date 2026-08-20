@@ -58,9 +58,9 @@ class ImageProcessor:
         if bbox is None:
             raise RuntimeError("Face not detected")
 
-        pt_left_eye = np.mean(landmark_2d_106[[43, 48, 49, 51, 50]], axis=0)  # left eyebrow center
-        pt_right_eye = np.mean(landmark_2d_106[101:106], axis=0)  # right eyebrow center
-        pt_nose = np.mean(landmark_2d_106[[74, 77, 83, 86]], axis=0)  # nose center
+        pt_left_eye = np.mean(landmark_2d_106[[33, 133, 159, 145]], axis=0)
+        pt_right_eye = np.mean(landmark_2d_106[[263, 362, 386, 374]], axis=0)
+        pt_nose = np.mean(landmark_2d_106[[1, 4, 19, 94]], axis=0)
 
         landmarks3 = np.round([pt_left_eye, pt_right_eye, pt_nose])
 
