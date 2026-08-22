@@ -1,4 +1,5 @@
 import mediapipe as mp
+import cv2
 import numpy as np
 import torch
 
@@ -8,14 +9,21 @@ class FaceDetector:
             static_image_mode=False,
             max_num_faces=5,
             refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_detection_confidence=0.2,
+            min_tracking_confidence=0.2,
         )
 
     def __call__(self, frame, threshold=0.5):
         f_h, f_w, _ = frame.shape
         # LatentSync's video readers already return RGB frames.
-        result = self.mesh.process(np.asarray(frame).astype(np.uint8))
+        frame = np.asarray(frame).astype(np.uint8)
+        result = self.mesh.process(frame)
+        if not result.multi_face_landmarks:
+            # Retry at a larger resolution so that small faces occupy enough pixels
+            # for FaceMesh's internal detector. Landmark coordinates are normalized,
+            # so they can still be mapped directly to the original frame dimensions.
+            enlarged_frame = cv2.resize(frame, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+            result = self.mesh.process(enlarged_frame)
         if not result.multi_face_landmarks:
             return None, None
         best = None
@@ -31,7 +39,7 @@ class FaceDetector:
             return None, None
         lmk, (x1, y1, x2, y2) = best
         w, h = x2 - x1, y2 - y1
-        if w < 50 or h < 80 or w / max(h, 1) > 1.5 or w / max(h, 1) < 0.2:
+        if w <= 0 or h <= 0:
             return None, None
         x1, y1 = max(0, x1 - int(w * .05)), max(0, y1 - int(h * .05))
         x2, y2 = min(f_w, x2 + int(w * .05)), min(f_h, y2 + int(h * .10))
