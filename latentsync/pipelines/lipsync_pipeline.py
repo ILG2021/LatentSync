@@ -44,8 +44,9 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class LoopedVideoFrames:
-    def __init__(self, video_path: str, indices: List[int]):
+    def __init__(self, video_path: str, indices: List[int], source_video_path: Optional[str] = None):
         self.video_path = video_path
+        self.source_video_path = source_video_path or video_path
         self.indices = indices
         self._vr = None
 
@@ -54,7 +55,7 @@ class LoopedVideoFrames:
 
     def __getitem__(self, idx):
         if isinstance(idx, slice):
-            return LoopedVideoFrames(self.video_path, self.indices[idx])
+            return LoopedVideoFrames(self.video_path, self.indices[idx], self.source_video_path)
 
         if self._vr is None:
             self._vr = decord.VideoReader(self.video_path)
@@ -276,15 +277,21 @@ class LipsyncPipeline(DiffusionPipeline):
         boxes = []
         affine_matrices = []
         print(f"Affine transforming {len(video_frames)} faces...")
-        video_name = Path(video_frames.video_path).stem
+        video_name = Path(video_frames.source_video_path).stem
         for index, frame in enumerate(tqdm.tqdm(video_frames)):
             try:
                 face, box, affine_matrix = self.image_processor.affine_transform(frame)
             except RuntimeError as exc:
                 source_frame_index = video_frames.indices[index]
-                failed_frame_path = f"{video_name}_failed_frame_{source_frame_index}.png"
+                failed_frame_path = Path(f"{video_name}_failed_frame_{source_frame_index}.png")
+                duplicate_index = 1
+                while failed_frame_path.exists():
+                    failed_frame_path = Path(
+                        f"{video_name}_failed_frame_{source_frame_index}_{duplicate_index}.png"
+                    )
+                    duplicate_index += 1
                 failed_frame = np.asarray(frame).astype(np.uint8)
-                cv2.imwrite(failed_frame_path, cv2.cvtColor(failed_frame, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(str(failed_frame_path), cv2.cvtColor(failed_frame, cv2.COLOR_RGB2BGR))
                 raise RuntimeError(
                     f"Face not detected in {video_name} at frame {source_frame_index}; "
                     f"saved frame to {failed_frame_path}"
@@ -333,7 +340,11 @@ class LipsyncPipeline(DiffusionPipeline):
                     loop_boxes += boxes[::-1]
                     loop_affine_matrices += affine_matrices[::-1]
 
-            video_frames = LoopedVideoFrames(video_frames.video_path, all_indices[: len(whisper_chunks)])
+            video_frames = LoopedVideoFrames(
+                video_frames.video_path,
+                all_indices[: len(whisper_chunks)],
+                video_frames.source_video_path,
+            )
             faces = torch.cat(loop_faces, dim=0)[: len(whisper_chunks)]
             boxes = loop_boxes[: len(whisper_chunks)]
             affine_matrices = loop_affine_matrices[: len(whisper_chunks)]
@@ -403,7 +414,7 @@ class LipsyncPipeline(DiffusionPipeline):
         vr_temp = decord.VideoReader(video_path_25fps)
         num_frames_total = len(vr_temp)
         del vr_temp
-        video_frames = LoopedVideoFrames(video_path_25fps, list(range(num_frames_total)))
+        video_frames = LoopedVideoFrames(video_path_25fps, list(range(num_frames_total)), video_path)
 
         video_frames, faces, boxes, affine_matrices = self.loop_video(whisper_chunks, video_frames)
 
