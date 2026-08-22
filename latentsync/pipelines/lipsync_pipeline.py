@@ -4,6 +4,7 @@ import inspect
 import math
 import os
 import shutil
+from pathlib import Path
 from typing import Callable, List, Optional, Union
 import subprocess
 import gc
@@ -275,8 +276,19 @@ class LipsyncPipeline(DiffusionPipeline):
         boxes = []
         affine_matrices = []
         print(f"Affine transforming {len(video_frames)} faces...")
-        for frame in tqdm.tqdm(video_frames):
-            face, box, affine_matrix = self.image_processor.affine_transform(frame)
+        video_name = Path(video_frames.video_path).stem
+        for index, frame in enumerate(tqdm.tqdm(video_frames)):
+            try:
+                face, box, affine_matrix = self.image_processor.affine_transform(frame)
+            except RuntimeError as exc:
+                source_frame_index = video_frames.indices[index]
+                failed_frame_path = f"{video_name}_failed_frame_{source_frame_index}.png"
+                failed_frame = np.asarray(frame).astype(np.uint8)
+                cv2.imwrite(failed_frame_path, cv2.cvtColor(failed_frame, cv2.COLOR_RGB2BGR))
+                raise RuntimeError(
+                    f"Face not detected in {video_name} at frame {source_frame_index}; "
+                    f"saved frame to {failed_frame_path}"
+                ) from exc
             faces.append(face)
             boxes.append(box)
             affine_matrices.append(affine_matrix)
