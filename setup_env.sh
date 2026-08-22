@@ -12,3 +12,9 @@ sudo apt -y install libgl1
 # Download the checkpoints required for inference from HuggingFace
 huggingface-cli download ByteDance/LatentSync-1.6 whisper/tiny.pt --local-dir checkpoints
 huggingface-cli download ByteDance/LatentSync-1.6 latentsync_unet.pt --local-dir checkpoints
+
+# Download the MIT-licensed YuNet face detector from the official OpenCV Zoo.
+mkdir -p checkpoints/auxiliary
+curl -L \
+  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
+  -o checkpoints/auxiliary/face_detection_yunet_2023mar.onnx

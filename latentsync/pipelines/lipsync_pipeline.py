@@ -273,29 +273,72 @@ class LipsyncPipeline(DiffusionPipeline):
         return images
 
     def affine_transform_video(self, video_frames):
+        max_interpolation_gap = 25
         faces = []
         boxes = []
         affine_matrices = []
-        print(f"Affine transforming {len(video_frames)} faces...")
+        landmarks = []
+        print(f"Detecting {len(video_frames)} faces...")
         video_name = Path(video_frames.source_video_path).stem
         for index, frame in enumerate(tqdm.tqdm(video_frames)):
-            try:
-                face, box, affine_matrix = self.image_processor.affine_transform(frame)
-            except RuntimeError as exc:
-                source_frame_index = video_frames.indices[index]
-                failed_frame_path = Path(f"{video_name}_failed_frame_{source_frame_index}.png")
-                duplicate_index = 1
-                while failed_frame_path.exists():
-                    failed_frame_path = Path(
-                        f"{video_name}_failed_frame_{source_frame_index}_{duplicate_index}.png"
-                    )
-                    duplicate_index += 1
-                failed_frame = np.asarray(frame).astype(np.uint8)
-                cv2.imwrite(str(failed_frame_path), cv2.cvtColor(failed_frame, cv2.COLOR_RGB2BGR))
-                raise RuntimeError(
-                    f"Face not detected in {video_name} at frame {source_frame_index}; "
-                    f"saved frame to {failed_frame_path}"
-                ) from exc
+            landmarks.append(self.image_processor.detect_face_landmarks(frame))
+
+        valid_indices = [index for index, value in enumerate(landmarks) if value is not None]
+        if not valid_indices:
+            failed_index = 0
+        else:
+            failed_index = None
+            missing_start = None
+            for index in range(len(landmarks) + 1):
+                is_missing = index < len(landmarks) and landmarks[index] is None
+                if is_missing and missing_start is None:
+                    missing_start = index
+                elif not is_missing and missing_start is not None:
+                    gap_length = index - missing_start
+                    if gap_length > max_interpolation_gap:
+                        failed_index = missing_start
+                        break
+
+                    left_index = missing_start - 1
+                    right_index = index if index < len(landmarks) else None
+                    for missing_index in range(missing_start, index):
+                        if left_index < 0:
+                            landmarks[missing_index] = landmarks[right_index].copy()
+                        elif right_index is None:
+                            landmarks[missing_index] = landmarks[left_index].copy()
+                        else:
+                            weight = (missing_index - left_index) / (right_index - left_index)
+                            landmarks[missing_index] = (
+                                landmarks[left_index] * (1.0 - weight) + landmarks[right_index] * weight
+                            )
+                    missing_start = None
+
+        if failed_index is not None:
+            source_frame_index = video_frames.indices[failed_index]
+            failed_frame_path = Path(f"{video_name}_failed_frame_{source_frame_index}.png")
+            duplicate_index = 1
+            while failed_frame_path.exists():
+                failed_frame_path = Path(
+                    f"{video_name}_failed_frame_{source_frame_index}_{duplicate_index}.png"
+                )
+                duplicate_index += 1
+            failed_frame = np.asarray(video_frames[failed_index]).astype(np.uint8)
+            cv2.imwrite(str(failed_frame_path), cv2.cvtColor(failed_frame, cv2.COLOR_RGB2BGR))
+            raise RuntimeError(
+                f"Face not detected in {video_name} for more than {max_interpolation_gap} consecutive frames; "
+                f"first failed frame {source_frame_index} saved to {failed_frame_path}"
+            )
+
+        repaired_count = len(landmarks) - len(valid_indices)
+        if repaired_count:
+            print(f"Interpolated face landmarks for {repaired_count} missing frames.")
+
+        # Align in temporal order after interpolation so AlignRestore's built-in
+        # smoothing sees a complete landmark track without discontinuities.
+        self.image_processor.restorer.p_bias = None
+        print(f"Affine transforming {len(video_frames)} faces...")
+        for frame, face_landmarks in tqdm.tqdm(zip(video_frames, landmarks), total=len(video_frames)):
+            face, box, affine_matrix = self.image_processor.affine_transform_with_landmarks(frame, face_landmarks)
             faces.append(face)
             boxes.append(box)
             affine_matrices.append(affine_matrix)
