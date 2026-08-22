@@ -54,13 +54,13 @@ class ImageProcessor:
     def affine_transform(self, image: torch.Tensor) -> np.ndarray:
         if self.face_detector is None:
             raise NotImplementedError("Using the CPU for face detection is not supported")
-        bbox, landmark_2d_106 = self.face_detector(image)
+        bbox, face_landmarks = self.face_detector(image)
         if bbox is None:
             raise RuntimeError("Face not detected")
 
-        pt_left_eye = np.mean(landmark_2d_106[[33, 133, 159, 145]], axis=0)
-        pt_right_eye = np.mean(landmark_2d_106[[263, 362, 386, 374]], axis=0)
-        pt_nose = np.mean(landmark_2d_106[[1, 4, 19, 94]], axis=0)
+        pt_left_eye = np.mean(face_landmarks[[33, 133, 159, 145]], axis=0)
+        pt_right_eye = np.mean(face_landmarks[[263, 362, 386, 374]], axis=0)
+        pt_nose = np.mean(face_landmarks[[1, 4, 19, 94]], axis=0)
 
         landmarks3 = np.round([pt_left_eye, pt_right_eye, pt_nose])
 
