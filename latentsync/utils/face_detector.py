@@ -1,18 +1,71 @@
-import mediapipe as mp
+import hashlib
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 import cv2
+import mediapipe as mp
 import numpy as np
 import torch
-from pathlib import Path
+
+
+YUNET_MODEL_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/"
+    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
+YUNET_MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+
+
+def _ensure_yunet_model(model_path: Path) -> Path:
+    """Download the YuNet model when it is not already installed."""
+    if model_path.is_file():
+        return model_path
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f"{model_path.name}.",
+            suffix=".download",
+            dir=model_path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            request = Request(YUNET_MODEL_URL, headers={"User-Agent": "LatentSync"})
+            with urlopen(request, timeout=60) as response:
+                shutil.copyfileobj(response, temporary_file)
+
+        digest = hashlib.sha256(temporary_path.read_bytes()).hexdigest()
+        if digest != YUNET_MODEL_SHA256:
+            raise RuntimeError(
+                f"Downloaded YuNet model failed checksum validation: expected "
+                f"{YUNET_MODEL_SHA256}, got {digest}"
+            )
+
+        # os.replace is atomic when source and destination are on the same volume.
+        os.replace(temporary_path, model_path)
+        temporary_path = None
+        return model_path
+    except (HTTPError, URLError, OSError, RuntimeError) as error:
+        raise RuntimeError(
+            f"YuNet face detector model is missing and could not be downloaded "
+            f"to {model_path}. Run setup_env.ps1 (Windows) or setup_env.sh "
+            f"(Linux/macOS), or download it from {YUNET_MODEL_URL}."
+        ) from error
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
 
 class FaceDetector:
     def __init__(self, device="cuda"):
         project_root = Path(__file__).resolve().parents[2]
         yunet_model_path = project_root / "checkpoints" / "auxiliary" / "face_detection_yunet_2023mar.onnx"
-        if not yunet_model_path.is_file():
-            raise FileNotFoundError(
-                f"YuNet face detector model not found: {yunet_model_path}. "
-                "Run setup_env.sh or download the MIT-licensed model from OpenCV Zoo."
-            )
+        yunet_model_path = _ensure_yunet_model(yunet_model_path)
         self.detector = cv2.FaceDetectorYN.create(
             str(yunet_model_path),
             "",
