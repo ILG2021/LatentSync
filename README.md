@@ -5,7 +5,6 @@
 [![arXiv](https://img.shields.io/badge/arXiv-Paper-b31b1b.svg?logo=arXiv)](https://arxiv.org/abs/2412.09262)
 [![arXiv](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow)](https://huggingface.co/ByteDance/LatentSync-1.6)
 [![arXiv](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Space-yellow)](https://huggingface.co/spaces/fffiloni/LatentSync)
-<a href="https://replicate.com/lucataco/latentsync"><img src="https://replicate.com/lucataco/latentsync/badge" alt="Replicate"></a>
 
 </div>
 
@@ -142,8 +141,6 @@ The complete data processing pipeline includes the following steps:
 3. Scene detect via [PySceneDetect](https://github.com/Breakthrough/PySceneDetect).
 4. Split each video into 5-10 second segments.
 5. Affine transform the faces according to the landmarks detected by MediaPipe Face Mesh, then resize to 256 $\times$ 256.
-6. Remove videos with [sync confidence score](https://www.robots.ox.ac.uk/~vgg/publications/2016/Chung16a/chung16a.pdf) lower than 3, and adjust the audio-visual offset to 0.
-7. Calculate [hyperIQA](https://openaccess.thecvf.com/content_CVPR_2020/papers/Su_Blindly_Assess_Image_Quality_in_the_Wild_Guided_by_a_CVPR_2020_paper.pdf) score, and remove videos with scores lower than 40.
 
 First, put your videos in the `my_data/raw` directory.
 
@@ -153,7 +150,7 @@ Then run the script to execute the data processing pipeline:
 ./data_processing_pipeline.sh
 ```
 
-The processed videos will be saved in the `high_visual_quality` directory. Each step will generate a new directory to prevent the need to redo the entire pipeline in case the process is interrupted by an unexpected error.
+The processed videos will be saved in the `affine_transformed` directory. Each step will generate a new directory to prevent the need to redo the entire pipeline in case the process is interrupted by an unexpected error.
 
 Then generate file list for training:
 
@@ -201,24 +198,26 @@ After `validations_steps` training, the loss charts will be saved in `train_outp
 
 ## 📊 Evaluation
 
-You can evaluate the [sync confidence score](https://www.robots.ox.ac.uk/~vgg/publications/2016/Chung16a/chung16a.pdf) of a generated video by running the following script:
-
-```bash
-./eval/eval_sync_conf.sh
-```
-
 You can evaluate the accuracy of SyncNet on a dataset by running the following script:
 
 ```bash
 ./eval/eval_syncnet_acc.sh
 ```
 
-Note that our released SyncNet is trained on data processed through our data processing pipeline, which includes special operations such as affine transformation and audio-visual adjustment. Therefore, before evaluation, the test data must first be processed using the provided pipeline.
+Note that our released SyncNet is trained on data processed through our data processing pipeline, including affine transformation. Therefore, before evaluation, the test data must first be processed using the provided pipeline.
+
+## ⚖️ Licensing
+
+The code in this repository is released under the Apache License 2.0. **Model weights are licensed separately** — `latentsync_unet.pt` is distributed under the [CreativeML Open RAIL++-M License](https://huggingface.co/ByteDance/LatentSync-1.6), which permits commercial use but attaches use-based restrictions that must be passed on to downstream recipients.
+
+A complete AI Bill of Materials — every code module and weight file with its source, license, byte count and SHA-256 — is in [`docs/AIBOM.html`](docs/AIBOM.html). Open it in a browser; it is a single self-contained file.
+
+Read it before redistributing weights, shipping an SDK, or handing fine-tuned checkpoints to a customer.
 
 ## 🙏 Acknowledgement
 
 - Our code is built on [AnimateDiff](https://github.com/guoyww/AnimateDiff). 
-- Some code are borrowed from [MuseTalk](https://github.com/TMElyralab/MuseTalk), [StyleSync](https://github.com/guanjz20/StyleSync), [SyncNet](https://github.com/joonson/syncnet_python), [Wav2Lip](https://github.com/Rudrabha/Wav2Lip).
+- Some code are borrowed from [MuseTalk](https://github.com/TMElyralab/MuseTalk) (MIT).
 
 Thanks for their generous contributions to the open-source community!
 

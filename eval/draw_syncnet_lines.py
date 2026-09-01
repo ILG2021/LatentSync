@@ -59,6 +59,5 @@ class Chart:
 
 if __name__ == "__main__":
     chart = Chart()
-    chart.add_ckpt("output/syncnet/train-2024_10_28-23:16:40/checkpoints/checkpoint-20000.pt", "Wav2Lip SyncNet")
     chart.add_ckpt("output/syncnet/train-2024_10_29-20:13:43/checkpoints/checkpoint-20000.pt", "StableSyncNet")
     chart.draw("ablation.pdf", plot_val=True)

@@ -417,6 +417,7 @@ class LipsyncPipeline(DiffusionPipeline):
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
+        return_generated_faces: bool = False,
         **kwargs,
     ):
         is_train = self.unet.training
@@ -578,5 +579,9 @@ class LipsyncPipeline(DiffusionPipeline):
         if hasattr(video_frames, '_vr') and video_frames._vr is not None:
             del video_frames._vr
             video_frames._vr = None
+
         del video_frames
         gc.collect()
+
+        if return_generated_faces:
+            return decoded_faces

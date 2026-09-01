@@ -31,7 +31,7 @@ def main(config):
 
     if config.data.latent_space:
         vae = AutoencoderKL.from_pretrained(
-            "runwayml/stable-diffusion-inpainting", subfolder="vae", revision="fp16", torch_dtype=torch.float16
+            "stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16
         )
         vae.requires_grad_(False)
         vae.to(device)

@@ -6,16 +6,15 @@ einops==0.7.0
 omegaconf==2.3.0
 opencv-python==4.9.0.80
 mediapipe==0.10.13
-python_speech_features==0.6
 librosa==0.10.1
 scenedetect==0.6.1
 ffmpeg-python==0.2.0
 imageio==2.31.1
 imageio-ffmpeg==0.5.1
 lpips==0.1.4
-face-alignment==1.4.1
 gradio==5.24.0
 huggingface-hub==0.30.2
 numpy==1.26.4
 kornia==0.8.0
 DeepCache==0.1.1
+tensorboard>=2.14

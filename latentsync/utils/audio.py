@@ -1,194 +1,82 @@
-# Adapted from https://github.com/Rudrabha/Wav2Lip/blob/master/audio.py
+"""Audio feature extraction used by the training datasets.
+
+The implementation is intentionally limited to the mel-spectrogram operation
+used by LatentSync. It is built from the public Librosa and NumPy APIs.
+"""
+
+from pathlib import Path
 
 import librosa
-import librosa.filters
 import numpy as np
-from scipy import signal
-from scipy.io import wavfile
 from omegaconf import OmegaConf
-import torch
-
-audio_config_path = "configs/audio.yaml"
-
-config = OmegaConf.load(audio_config_path)
 
 
-def load_wav(path, sr):
-    return librosa.core.load(path, sr=sr)[0]
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "audio.yaml"
+config = OmegaConf.load(_CONFIG_PATH)
 
 
-def save_wav(wav, path, sr):
-    wav *= 32767 / max(0.01, np.max(np.abs(wav)))
-    # proposed by @dsmiller
-    wavfile.write(path, sr, wav.astype(np.int16))
+def _apply_preemphasis(samples: np.ndarray) -> np.ndarray:
+    """Apply the first-order high-pass filter configured for training audio."""
+    samples = np.asarray(samples, dtype=np.float64)
+    if not config.audio.preemphasize or samples.size == 0:
+        return samples
+
+    coefficient = config.audio.preemphasis
+    emphasized = np.empty_like(samples)
+    emphasized[0] = samples[0]
+    emphasized[1:] = samples[1:] - coefficient * samples[:-1]
+    return emphasized
 
 
-def save_wavenet_wav(wav, path, sr):
-    librosa.output.write_wav(path, wav, sr=sr)
+def _normalize_decibels(decibels: np.ndarray) -> np.ndarray:
+    """Map the configured decibel range to the model's feature range."""
+    min_db = config.audio.min_level_db
+    max_value = config.audio.max_abs_value
+    unit_interval = (decibels - min_db) / -min_db
+
+    if config.audio.symmetric_mels:
+        normalized = 2 * max_value * unit_interval - max_value
+        if config.audio.allow_clipping_in_normalization:
+            normalized = np.clip(normalized, -max_value, max_value)
+    else:
+        normalized = max_value * unit_interval
+        if config.audio.allow_clipping_in_normalization:
+            normalized = np.clip(normalized, 0, max_value)
+
+    if not config.audio.allow_clipping_in_normalization:
+        if decibels.max() > 0 or decibels.min() < min_db:
+            raise ValueError("Mel-spectrogram values fall outside the configured decibel range")
+
+    return normalized
 
 
-def preemphasis(wav, k, preemphasize=True):
-    if preemphasize:
-        return signal.lfilter([1, -k], [1], wav)
-    return wav
-
-
-def inv_preemphasis(wav, k, inv_preemphasize=True):
-    if inv_preemphasize:
-        return signal.lfilter([1], [1, -k], wav)
-    return wav
-
-
-def get_hop_size():
-    hop_size = config.audio.hop_size
-    if hop_size is None:
-        assert config.audio.frame_shift_ms is not None
-        hop_size = int(config.audio.frame_shift_ms / 1000 * config.audio.sample_rate)
-    return hop_size
-
-
-def linearspectrogram(wav):
-    D = _stft(preemphasis(wav, config.audio.preemphasis, config.audio.preemphasize))
-    S = _amp_to_db(np.abs(D)) - config.audio.ref_level_db
-
-    if config.audio.signal_normalization:
-        return _normalize(S)
-    return S
-
-
-def melspectrogram(wav):
-    D = _stft(preemphasis(wav, config.audio.preemphasis, config.audio.preemphasize))
-    S = _amp_to_db(_linear_to_mel(np.abs(D))) - config.audio.ref_level_db
-
-    if config.audio.signal_normalization:
-        return _normalize(S)
-    return S
-
-
-def _lws_processor():
-    import lws
-
-    return lws.lws(config.audio.n_fft, get_hop_size(), fftsize=config.audio.win_size, mode="speech")
-
-
-def _stft(y):
+def melspectrogram(samples: np.ndarray) -> np.ndarray:
+    """Convert mono audio samples to normalized mel-spectrogram features."""
     if config.audio.use_lws:
-        return _lws_processor(config.audio).stft(y).T
-    else:
-        return librosa.stft(y=y, n_fft=config.audio.n_fft, hop_length=get_hop_size(), win_length=config.audio.win_size)
+        raise NotImplementedError("The LatentSync training configuration requires Librosa STFT")
 
-
-##########################################################
-# Those are only correct when using lws!!! (This was messing with Wavenet quality for a long time!)
-def num_frames(length, fsize, fshift):
-    """Compute number of time frames of spectrogram"""
-    pad = fsize - fshift
-    if length % fshift == 0:
-        M = (length + pad * 2 - fsize) // fshift + 1
-    else:
-        M = (length + pad * 2 - fsize) // fshift + 2
-    return M
-
-
-def pad_lr(x, fsize, fshift):
-    """Compute left and right padding"""
-    M = num_frames(len(x), fsize, fshift)
-    pad = fsize - fshift
-    T = len(x) + 2 * pad
-    r = (M - 1) * fshift + fsize - T
-    return pad, pad + r
-
-
-##########################################################
-# Librosa correct padding
-def librosa_pad_lr(x, fsize, fshift):
-    return 0, (x.shape[0] // fshift + 1) * fshift - x.shape[0]
-
-
-# Conversions
-_mel_basis = None
-
-
-def _linear_to_mel(spectogram):
-    global _mel_basis
-    if _mel_basis is None:
-        _mel_basis = _build_mel_basis()
-    return np.dot(_mel_basis, spectogram)
-
-
-def _build_mel_basis():
-    assert config.audio.fmax <= config.audio.sample_rate // 2
-    return librosa.filters.mel(
+    emphasized = _apply_preemphasis(samples)
+    magnitude = np.abs(
+        librosa.stft(
+            y=emphasized,
+            n_fft=config.audio.n_fft,
+            hop_length=config.audio.hop_size,
+            win_length=config.audio.win_size,
+        )
+    )
+    mel_basis = librosa.filters.mel(
         sr=config.audio.sample_rate,
         n_fft=config.audio.n_fft,
         n_mels=config.audio.num_mels,
         fmin=config.audio.fmin,
         fmax=config.audio.fmax,
     )
+    mel_magnitude = mel_basis @ magnitude
 
+    amplitude_floor = 10.0 ** (config.audio.min_level_db / 20.0)
+    decibels = 20.0 * np.log10(np.maximum(amplitude_floor, mel_magnitude))
+    decibels -= config.audio.ref_level_db
 
-def _amp_to_db(x):
-    min_level = np.exp(config.audio.min_level_db / 20 * np.log(10))
-    return 20 * np.log10(np.maximum(min_level, x))
-
-
-def _db_to_amp(x):
-    return np.power(10.0, (x) * 0.05)
-
-
-def _normalize(S):
-    if config.audio.allow_clipping_in_normalization:
-        if config.audio.symmetric_mels:
-            return np.clip(
-                (2 * config.audio.max_abs_value) * ((S - config.audio.min_level_db) / (-config.audio.min_level_db))
-                - config.audio.max_abs_value,
-                -config.audio.max_abs_value,
-                config.audio.max_abs_value,
-            )
-        else:
-            return np.clip(
-                config.audio.max_abs_value * ((S - config.audio.min_level_db) / (-config.audio.min_level_db)),
-                0,
-                config.audio.max_abs_value,
-            )
-
-    assert S.max() <= 0 and S.min() - config.audio.min_level_db >= 0
-    if config.audio.symmetric_mels:
-        return (2 * config.audio.max_abs_value) * (
-            (S - config.audio.min_level_db) / (-config.audio.min_level_db)
-        ) - config.audio.max_abs_value
-    else:
-        return config.audio.max_abs_value * ((S - config.audio.min_level_db) / (-config.audio.min_level_db))
-
-
-def _denormalize(D):
-    if config.audio.allow_clipping_in_normalization:
-        if config.audio.symmetric_mels:
-            return (
-                (np.clip(D, -config.audio.max_abs_value, config.audio.max_abs_value) + config.audio.max_abs_value)
-                * -config.audio.min_level_db
-                / (2 * config.audio.max_abs_value)
-            ) + config.audio.min_level_db
-        else:
-            return (
-                np.clip(D, 0, config.audio.max_abs_value) * -config.audio.min_level_db / config.audio.max_abs_value
-            ) + config.audio.min_level_db
-
-    if config.audio.symmetric_mels:
-        return (
-            (D + config.audio.max_abs_value) * -config.audio.min_level_db / (2 * config.audio.max_abs_value)
-        ) + config.audio.min_level_db
-    else:
-        return (D * -config.audio.min_level_db / config.audio.max_abs_value) + config.audio.min_level_db
-
-
-def get_melspec_overlap(audio_samples, melspec_length=52):
-    mel_spec_overlap = melspectrogram(audio_samples.numpy())
-    mel_spec_overlap = torch.from_numpy(mel_spec_overlap)
-    i = 0
-    mel_spec_overlap_list = []
-    while i + melspec_length < mel_spec_overlap.shape[1] - 3:
-        mel_spec_overlap_list.append(mel_spec_overlap[:, i : i + melspec_length].unsqueeze(0))
-        i += 3
-    mel_spec_overlap = torch.stack(mel_spec_overlap_list)
-    return mel_spec_overlap
+    if config.audio.signal_normalization:
+        return _normalize_decibels(decibels)
+    return decibels

@@ -49,7 +49,8 @@ def load_videomae_model(device, ckpt_path=None, with_cp=False):
     if not os.path.exists(ckpt_path):
         # download the ckpt to the path
         print(f"Downloading checkpoint to {ckpt_path}...")
-        ckpt_url = "https://huggingface.co/ByteDance/LatentSync-1.6/resolve/main/auxiliary/vit_g_hybrid_pt_1200e_ssv2_ft.pth"
+        # Apache-2.0, upstream release by the VideoMAEv2 authors (OpenGVLab).
+        ckpt_url = "https://huggingface.co/OpenGVLab/VideoMAE2/resolve/main/mae-g/vit_g_hybrid_pt_1200e_ssv2_ft.pth"
         response = requests.get(ckpt_url, stream=True, allow_redirects=True)
         total_size = int(response.headers.get("content-length", 0))
         block_size = 1024

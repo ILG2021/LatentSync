@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LatentSync AIBOM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --ground:#FBFBFD; --surface:#FFFFFF; --surface-2:#F4F5F9;
+  --ink:#16181F; --ink-2:#3D4351; --muted:#646B7C;
+  --line:#DFE2EB; --line-soft:#ECEEF4;
+  --accent:#2B4C8C; --accent-soft:#E8EDF7;
+  --clear:#1F7A4D; --clear-soft:#E4F2EA;
+  --duty:#8A5D0B; --duty-soft:#FAEFD9;
+  --gone:#9E2B2B; --gone-soft:#F8E7E7;
+  --shadow:0 1px 2px rgba(22,24,31,.05),0 8px 24px -12px rgba(22,24,31,.14);
+  --f-display:"Newsreader","Songti SC","Noto Serif CJK SC",Georgia,serif;
+  --f-body:"IBM Plex Sans","PingFang SC","Microsoft YaHei",-apple-system,system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#14161C; --surface:#1B1E26; --surface-2:#22262F;
+    --ink:#E9EBF1; --ink-2:#C0C5D2; --muted:#949BAC;
+    --line:#2E333F; --line-soft:#252A34;
+    --accent:#8AA7E8; --accent-soft:#1E2739;
+    --clear:#5EC48D; --clear-soft:#16281F;
+    --duty:#E0B054; --duty-soft:#2B2317;
+    --gone:#E88A8A; --gone-soft:#2C1B1B;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14161C; --surface:#1B1E26; --surface-2:#22262F;
+  --ink:#E9EBF1; --ink-2:#C0C5D2; --muted:#949BAC;
+  --line:#2E333F; --line-soft:#252A34;
+  --accent:#8AA7E8; --accent-soft:#1E2739;
+  --clear:#5EC48D; --clear-soft:#16281F;
+  --duty:#E0B054; --duty-soft:#2B2317;
+  --gone:#E88A8A; --gone-soft:#2C1B1B;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:940px;margin:0 auto;padding:56px 28px 96px}
+@media(max-width:640px){.wrap{padding:36px 18px 64px}}
+
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 32%,transparent)}
+a:hover{border-bottom-color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+
+.eyebrow{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+.mast{display:flex;flex-direction:column;gap:14px;padding-bottom:28px;border-bottom:1px solid var(--line)}
+.mast h1{font-family:var(--f-display);font-weight:500;font-size:clamp(30px,5vw,44px);line-height:1.14;letter-spacing:-.015em;margin:0;text-wrap:balance}
+.mast .sub{color:var(--muted);max-width:64ch;margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.meta b{color:var(--ink-2);font-weight:500}
+
+.verdict{margin:32px 0 8px;background:var(--surface);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);overflow:hidden}
+.verdict-top{display:flex;align-items:flex-start;gap:18px;padding:24px 26px}
+.seal{flex:none;width:52px;height:52px;border-radius:50%;background:var(--clear-soft);border:1.5px solid color-mix(in srgb,var(--clear) 45%,transparent);display:grid;place-items:center;color:var(--clear)}
+.verdict h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+.verdict p{margin:0;color:var(--ink-2);font-size:14.5px;max-width:60ch}
+.tally{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line-soft);background:var(--surface-2)}
+.tally div{padding:14px 26px;border-right:1px solid var(--line-soft)}
+.tally div:last-child{border-right:0}
+.tally .n{font-family:var(--f-mono);font-size:22px;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.2}
+.tally .l{font-size:12px;color:var(--muted)}
+.n.clear{color:var(--clear)}.n.duty{color:var(--duty)}.n.gone{color:var(--gone)}
+@media(max-width:560px){.tally{grid-template-columns:1fr}.tally div{border-right:0;border-bottom:1px solid var(--line-soft)}}
+
+/* part banner */
+.part{margin:64px 0 8px;padding:20px 0 16px;border-top:2px solid var(--ink);border-bottom:1px solid var(--line)}
+.part .num{font-family:var(--f-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:6px}
+.part h2{font-family:var(--f-display);font-weight:600;font-size:clamp(24px,4vw,32px);margin:0 0 8px;letter-spacing:-.014em}
+.part p{margin:0;color:var(--muted);font-size:14.5px;max-width:68ch}
+
+/* remediation divider */
+.rift{margin:72px 0 12px;display:flex;align-items:center;gap:18px}
+.rift .bar{flex:1;height:1px;background:repeating-linear-gradient(90deg,var(--line) 0 7px,transparent 7px 14px)}
+.rift .tag{font-family:var(--f-mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 38%,transparent);background:var(--accent-soft);padding:6px 16px;border-radius:2px;white-space:nowrap}
+
+section{margin-top:44px}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px;flex-wrap:wrap}
+.sec-head h3{font-family:var(--f-display);font-weight:600;font-size:23px;margin:0;letter-spacing:-.012em}
+.sec-note{color:var(--muted);font-size:14px;margin:0 0 20px;max-width:68ch}
+
+.row{position:relative;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--stripe,var(--line));border-radius:3px;padding:18px 22px;margin-bottom:10px;box-shadow:var(--shadow)}
+.row.is-clear{--stripe:var(--clear)}
+.row.is-duty{--stripe:var(--duty)}
+.row.is-gone{--stripe:var(--gone)}
+.row-top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;margin-bottom:12px}
+.name{font-family:var(--f-mono);font-size:14px;font-weight:500;color:var(--ink);word-break:break-all}
+.name.plain{font-family:var(--f-body);font-size:15.5px}
+.chip{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.03em;padding:2.5px 9px;border-radius:2px;white-space:nowrap}
+.chip.clear{background:var(--clear-soft);color:var(--clear)}
+.chip.duty{background:var(--duty-soft);color:var(--duty)}
+.chip.gone{background:var(--gone-soft);color:var(--gone)}
+.chip.neutral{background:var(--accent-soft);color:var(--accent)}
+.chip.infer{background:transparent;color:var(--muted);border:1px dashed color-mix(in srgb,var(--muted) 55%,transparent)}
+.chip.derived{background:transparent;color:var(--clear);border:1px dashed color-mix(in srgb,var(--clear) 50%,transparent)}
+.spacer{flex:1 1 auto}
+
+.legend{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;padding:13px 18px;margin-bottom:20px;background:var(--surface-2);border:1px solid var(--line);border-radius:3px;font-size:12.5px;color:var(--muted)}
+.legend .item{display:flex;align-items:center;gap:7px}
+
+dl.fields{display:grid;grid-template-columns:92px minmax(0,1fr);gap:5px 16px;margin:0;font-size:13px}
+@media(max-width:560px){dl.fields{grid-template-columns:1fr;gap:1px 0}dl.fields dt{margin-top:8px}}
+dl.fields dt{color:var(--muted);font-size:12px;padding-top:1px}
+dl.fields dd{margin:0;color:var(--ink-2);min-width:0}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-size:12.5px;word-break:break-all}
+.scroll{overflow-x:auto;max-width:100%}
+
+.flag{margin-top:12px;padding:10px 13px;border-radius:3px;font-size:13px;background:var(--duty-soft);color:var(--duty);border:1px solid color-mix(in srgb,var(--duty) 24%,transparent)}
+.flag.good{background:var(--clear-soft);color:var(--clear);border-color:color-mix(in srgb,var(--clear) 24%,transparent)}
+.flag.bad{background:var(--gone-soft);color:var(--gone);border-color:color-mix(in srgb,var(--gone) 24%,transparent)}
+.flag b{font-weight:600}
+.flag code{font-family:var(--f-mono);font-size:12px}
+
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:3px;background:var(--surface);box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+th,td{text-align:left;padding:9px 16px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+th{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+td.pkg{font-family:var(--f-mono);font-size:12.5px;color:var(--ink)}
+td.lic{font-family:var(--f-mono);font-size:12px;color:var(--ink-2);white-space:nowrap}
+td.was{color:var(--gone)}
+td.now{color:var(--clear)}
+
+ol.duties{list-style:none;counter-reset:d;padding:0;margin:0;display:flex;flex-direction:column;gap:9px}
+ol.duties li{counter-increment:d;position:relative;padding:14px 18px 14px 50px;background:var(--surface);border:1px solid var(--line);border-radius:3px;font-size:14px;color:var(--ink-2)}
+ol.duties li::before{content:counter(d);position:absolute;left:16px;top:14px;font-family:var(--f-mono);font-size:11px;font-weight:500;color:var(--accent);width:20px;height:20px;border-radius:50%;background:var(--accent-soft);display:grid;place-items:center}
+ol.duties b{color:var(--ink);font-weight:600}
+
+/* gradient-path diagram */
+.path{display:flex;flex-direction:column;gap:0;margin:4px 0 18px;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
+.path-band{padding:14px 20px;border-bottom:1px solid var(--line-soft)}
+.path-band:last-child{border-bottom:0}
+.path-band.inside{background:var(--clear-soft)}
+.path-band .hdr{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.path-band .hdr strong{font-size:14px}
+.path-band ul{margin:0;padding-left:20px;font-size:13.5px;color:var(--ink-2)}
+.path-band li{margin-bottom:2px}
+.path-band .why{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+
+.footnote{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);max-width:72ch}
+.footnote p{margin:0 0 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <span class="eyebrow">AI Bill of Materials</span>
+    <h1>LatentSync 商用许可核查</h1>
+    <p class="sub">分三部分：上游 ByteDance 原始仓库的许可缺陷、我方整改记录、整改后的完整物料清单。附「权重本身是否合规」专项分析。</p>
+    <div class="meta">
+      <span>核查日期 <b>2026-09-01</b></span>
+      <span>上游基线 <b>LatentSync 1.6</b></span>
+      <span>分支 <b>main</b></span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div class="verdict-top">
+      <div class="seal" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <div>
+        <h2>整改后可商用</h2>
+        <p>上游存在 3 处无授权代码被置于 Apache-2.0 之下分发，均已重写或删除。整改后所有组件持有允许商用的授权，仅余 UNet 权重 OpenRAIL++-M 的合同义务需写入用户协议。</p>
+      </div>
+    </div>
+    <div class="tally">
+      <div><div class="n gone">3</div><div class="l">上游无授权代码（已清除）</div></div>
+      <div><div class="n duty">1</div><div class="l">遗留义务，待写入 ToS</div></div>
+      <div><div class="n clear">11</div><div class="l">组件已放行</div></div>
+    </div>
+  </div>
+
+
+  <div class="part">
+    <span class="num">Part I</span>
+    <h2>上游原始状态</h2>
+    <p>针对 <a href="https://github.com/bytedance/LatentSync">bytedance/LatentSync</a> 与 <a href="https://huggingface.co/ByteDance/LatentSync-1.6">ByteDance/LatentSync-1.6</a> 未经修改的发布版本。以下为直接核查各上游项目 LICENSE 文件与仓库 tag 后的结论。</p>
+  </div>
+
+  <section>
+    <div class="sec-head"><h3>核心缺陷</h3><span class="eyebrow">许可证声明与实际内容不符</span></div>
+    <div class="row is-gone">
+      <div class="row-top"><span class="name plain">仓库以 Apache-2.0 分发了无授权的第三方代码</span><span class="chip gone">实质违规</span></div>
+      <p style="margin:0 0 12px;font-size:14px;color:var(--ink-2)">根目录 <span class="mono">LICENSE</span> 为 Apache License 2.0，覆盖全仓库。但仓库内含三份改编自<b>无任何许可证</b>项目的代码——原作者从未授予任何权利，ByteDance 因而既无权分发，更无权将其重新许可为 Apache-2.0。</p>
+      <div class="flag bad">该矛盾在 README 中即可见：致谢段落明写 <em>“Some code are borrowed from MuseTalk, <b>StyleSync</b>, SyncNet, <b>Wav2Lip</b>”</em>，而 StyleSync 无 LICENSE 文件、Wav2Lip 亦无 LICENSE 文件且 README 声明限非商业用途。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>无授权代码</h3><span class="eyebrow">3 项 · 必须处理</span></div>
+
+    <div class="row is-gone">
+      <div class="row-top"><span class="name">latentsync/utils/affine_transform.py</span><span class="chip gone">无许可证</span><span class="spacer"></span><span class="chip neutral">推理主链路</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd>标注 <span class="mono">Adapted from guanjz20/StyleSync/utils.py</span></dd>
+        <dt>核查</dt><dd>GitHub API 返回 SPDX <span class="mono">None</span>，<b>仓库无 LICENSE 文件</b>。作者仅说明学术用途需邮件联系索取权重</dd>
+        <dt>严重性</dt><dd><b>最高。</b>位于 <span class="mono">LipsyncPipeline</span> 的人脸对齐与贴回路径，每次推理都会执行，无法通过删除功能规避</dd>
+      </dl>
+    </div>
+
+    <div class="row is-gone">
+      <div class="row-top"><span class="name">latentsync/utils/audio.py</span><span class="chip gone">无许可证 · 非商用</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd>标注 <span class="mono">Adapted from Rudrabha/Wav2Lip/audio.py</span></dd>
+        <dt>核查</dt><dd>GitHub API 返回 SPDX <span class="mono">None</span>，<b>无 LICENSE 文件</b>。README 声明 “can only be used for personal/research/non-commercial purposes”</dd>
+        <dt>作用</dt><dd>梅尔频谱变换，供 SyncNet 训练与验证读取音频特征</dd>
+      </dl>
+    </div>
+
+    <div class="row is-gone">
+      <div class="row-top"><span class="name">eval/fvd.py</span><span class="chip gone">无许可证</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd>标注 <span class="mono">Adapted from universome/fvd-comparison/our_fvd.py</span></dd>
+        <dt>核查</dt><dd><span class="mono">universome/fvd-comparison</span> 与其主仓库 <span class="mono">universome/stylegan-v</span> <b>均返回 SPDX None</b></dd>
+        <dt>范围</dt><dd>其调用的 <span class="mono">i3d_torchscript.pt</span> 本身是 tf.hub I3D（Apache-2.0）的移植，<b>问题在移植代码而非权重</b></dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>权重托管问题</h3><span class="eyebrow">来源歧义或标注不实</span></div>
+    <p class="sec-note">ByteDance 在 <span class="mono">LatentSync-1.6/auxiliary/</span> 转发托管了六份第三方权重。整个 HF 仓库的 license tag 为 <span class="mono">openrail++</span>，等于将这些来源与条款各异的第三方文件笼统标注为同一许可——既不准确，也未逐项声明。</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>文件</th><th>大小</th><th>真实来源与条款</th></tr></thead>
+        <tbody>
+          <tr><td class="pkg">syncnet_v2.model</td><td class="lic">54.6 MB</td><td>Oxford VGG lipsync：<em>“can be used for <b>research purposes</b> under Creative Commons Attribution License”</em> — CC-BY 允许商用却又限定 research，<b>表述自相矛盾</b></td></tr>
+          <tr><td class="pkg">sfd_face.pth</td><td class="lic">89.8 MB</td><td>同上，来自同一 Oxford 页面</td></tr>
+          <tr><td class="pkg">koniq_pretrained.pkl</td><td class="lic">110 MB</td><td>hyperIQA 权重，训练于 KonIQ-10k，<b>无独立许可声明</b></td></tr>
+          <tr><td class="pkg">i3d_torchscript.pt</td><td class="lic">51.2 MB</td><td>tf.hub I3D 的 TorchScript 移植，权重血统为 Apache-2.0</td></tr>
+          <tr><td class="pkg">vgg16-397923af.pth</td><td class="lic">553 MB</td><td>torchvision 重训权重，仓库 BSD-3-Clause 但<b>无权重级声明</b></td></tr>
+          <tr><td class="pkg">vit_g_hybrid_pt_1200e_ssv2_ft.pth</td><td class="lic">2.02 GB</td><td>转发自 OpenGVLab（Apache-2.0），<b>但转发方未声明该文件许可</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>其他缺陷</h3></div>
+    <div class="row is-duty">
+      <div class="row-top"><span class="name">eval/eval_syncnet_acc.py</span><span class="chip duty">OpenRAIL-M · 已下架</span></div>
+      <dl class="fields">
+        <dt>问题</dt><dd>引用 <span class="mono">runwayml/stable-diffusion-inpainting</span> 的 VAE：许可为 OpenRAIL-M，且该 HF 仓库已下架，代码实际无法运行。同时与训练脚本使用的 <span class="mono">sd-vae-ft-mse</span> 不一致，评估结果与训练不可比</dd>
+      </dl>
+    </div>
+    <div class="row is-duty">
+      <div class="row-top"><span class="name">predict.py · cog.yaml</span><span class="chip duty">来源不可审计</span></div>
+      <dl class="fields">
+        <dt>问题</dt><dd>从第三方 <span class="mono">weights.replicate.delivery</span> 下载打包权重 <span class="mono">model.tar</span>，内容不受版本控制、无法审计，且软链接引用了上表中的受限辅助权重</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>澄清：以下并非违规</h3><span class="eyebrow">避免过度收紧</span></div>
+    <p class="sec-note">核查中曾被怀疑、但经查证许可清白的组件。列出以免尽调时误判，或因过度删减损失功能。</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>组件</th><th>实际许可</th><th>核查依据</th></tr></thead>
+        <tbody>
+          <tr><td class="pkg">joonson/syncnet_python</td><td class="lic">MIT</td><td>LICENSE.md 标准 MIT 全文，Joon Son Chung，无任何限制条款</td></tr>
+          <tr><td class="pkg">SSL92/hyperIQA</td><td class="lic">MIT</td><td>GitHub API SPDX <span class="mono">MIT</span></td></tr>
+          <tr><td class="pkg">wav2lip_syncnet.py</td><td class="lic">MIT</td><td>实际改编自 <span class="mono">primepake/wav2lip_288x288</span>（MIT），非 Rudrabha 本体</td></tr>
+          <tr><td class="pkg">TMElyralab/MuseTalk</td><td class="lic">MIT</td><td>Tencent Music。GitHub 返回 NOASSERTION 系因 LICENSE 附有依赖清单干扰分类器</td></tr>
+          <tr><td class="pkg">guoyww/AnimateDiff</td><td class="lic">Apache-2.0</td><td>LICENSE.txt</td></tr>
+          <tr><td class="pkg">OpenGVLab/VideoMAEv2</td><td class="lic">MIT + Apache-2.0</td><td>代码 MIT；权重经作者官方 HF 仓库以 apache-2.0 释出</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+
+  <div class="rift">
+    <span class="bar"></span>
+    <span class="tag">以下为整改后</span>
+    <span class="bar"></span>
+  </div>
+
+  <div class="part">
+    <span class="num">Part II</span>
+    <h2>整改记录</h2>
+    <p>逐项处置。重写优先于删除——推理链路上的代码无法删除，只能以独立实现替换。</p>
+  </div>
+
+  <section>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>项目</th><th>整改前</th><th>整改后</th><th>处置方式</th></tr></thead>
+        <tbody>
+          <tr><td class="pkg">affine_transform.py</td><td class="was">无许可证</td><td class="now">Apache-2.0</td><td>依 Umeyama 1991 论文公式以 NumPy 独立重写，经对拍验证与原实现逐位一致</td></tr>
+          <tr><td class="pkg">utils/audio.py</td><td class="was">无许可证</td><td class="now">Apache-2.0</td><td>仅用 librosa / NumPy 公开 API 重写梅尔频谱路径</td></tr>
+          <tr><td class="pkg">eval/fvd.py · eval_fvd.py</td><td class="was">无许可证</td><td class="now">已删除</td><td>FVD 为可选评估指标，删除不影响训练与推理</td></tr>
+          <tr><td class="pkg">wav2lip_syncnet.py</td><td class="lic">MIT</td><td class="now">已删除</td><td>原为注释掉的备选架构，无引用</td></tr>
+          <tr><td class="pkg">eval/syncnet/ · s3fd/ · hyper_iqa.py</td><td class="lic">代码 MIT</td><td class="now">已删除</td><td><b>预防性</b>：代码清白，但依赖的 Oxford / KonIQ 权重来源歧义，且整条路径可选</td></tr>
+          <tr><td class="pkg">TREPA 下载源</td><td class="was">ByteDance 转发</td><td class="now">OpenGVLab 原发布</td><td>使授权链直指声明 Apache-2.0 的作者仓库</td></tr>
+          <tr><td class="pkg">eval_syncnet_acc.py</td><td class="was">runwayml · OpenRAIL-M</td><td class="now">sd-vae-ft-mse · MIT</td><td>兼修复：原仓库已下架，且与训练用 VAE 不一致</td></tr>
+          <tr><td class="pkg">predict.py · cog.yaml</td><td class="was">第三方权重包</td><td class="now">已删除</td><td>连带移除 README 的 Replicate badge</td></tr>
+          <tr><td class="pkg">face-alignment 依赖</td><td class="was">拉取 S3FD 权重</td><td class="now">已移除</td><td>全项目无引用，为原 S3FD 遗留</td></tr>
+          <tr><td class="pkg">checkpoints/.cache</td><td class="was">受限权重下载记录</td><td class="now">已清理</td><td>三份 metadata 残留，对应权重已不在磁盘</td></tr>
+          <tr><td class="pkg">README 致谢</td><td class="was">列举 StyleSync/SyncNet/Wav2Lip</td><td class="now">仅列 MuseTalk</td><td>与实际代码构成一致</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="flag" style="margin-top:16px"><b>尚未处理：</b>git 历史中仍保留已删除的约 2,360 行代码。若对外分发仓库，历史中的文件同样构成分发行为，建议 squash 或以干净仓库重新初始化。</div>
+  </section>
+
+
+  <div class="part">
+    <span class="num">Part III</span>
+    <h2>整改后物料清单</h2>
+    <p>当前 <span class="mono">main</span> 分支的完整组件清单。哈希与字节数取自本地 <span class="mono">checkpoints/</span> 实际文件。</p>
+  </div>
+
+  <section>
+    <div class="legend">
+      <span class="item"><span class="chip clear">MIT</span> 权利人对权重的显式声明</span>
+      <span class="item"><span class="chip derived">随仓库覆盖</span> 文件在仓库内，落入其 LICENSE 范围</span>
+      <span class="item"><span class="chip infer">推定</span> 无权重级声明，依推理判定</span>
+    </div>
+    <div class="sec-head"><h3>交付物权重</h3><span class="eyebrow">推理时加载 · 进入产品</span></div>
+
+    <div class="row is-duty">
+      <div class="row-top"><span class="name">latentsync_unet.pt</span><span class="chip duty">OpenRAIL++-M</span><span class="spacer"></span><span class="chip neutral">附义务</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd><a href="https://huggingface.co/ByteDance/LatentSync-1.6">ByteDance/LatentSync-1.6</a>，tag <span class="mono">openrail++</span></dd>
+        <dt>字节数</dt><dd class="mono">5,072,222,488</dd>
+        <dt>SHA-256</dt><dd class="mono scroll">0a478e89eb660f82da4c35dbdde8a5adfb27f99d1b4e50edd03729e1e98316d3</dd>
+        <dt>血统</dt><dd>由 Stable Diffusion 初始化，故继承 RAIL 系许可</dd>
+      </dl>
+      <div class="flag"><b>允许商用</b>，须履行下方「遗留义务」5 条。自训练权重若从此检查点续训（<code>stage2.yaml</code> 默认如此），产出同为衍生模型，条款照常传递。</div>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">whisper/tiny.pt</span><span class="chip clear">MIT</span><span class="spacer"></span><span class="chip neutral">指纹已验证</span></div>
+      <dl class="fields">
+        <dt>声明状态</dt><dd>README 明确涵盖权重：<em>“Whisper's code <b>and model weights</b> are released under the MIT License.”</em>——权重级的显式声明</dd>
+        <dt>字节数</dt><dd class="mono">75,572,083</dd>
+        <dt>SHA-256</dt><dd class="mono scroll">65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9</dd>
+      </dl>
+      <div class="flag good"><b>硬证据：</b>该哈希与 OpenAI 官方下载 URL 内嵌的哈希逐字符一致（见 <code>latentsync/whisper/whisper/__init__.py:18</code>），证明此文件即 MIT 原始发布，未经修改。</div>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">face_detection_yunet_2023mar.onnx</span><span class="chip clear">MIT</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd><a href="https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet">OpenCV Zoo</a>：“All files in this directory are licensed under MIT License”</dd>
+        <dt>字节数</dt><dd class="mono">232,589</dd>
+        <dt>SHA-256</dt><dd class="mono scroll">8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4</dd>
+      </dl>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">stabilityai/sd-vae-ft-mse</span><span class="chip clear">MIT</span><span class="spacer"></span><span class="chip neutral">运行时拉取</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd><a href="https://huggingface.co/stabilityai/sd-vae-ft-mse">HF · stabilityai/sd-vae-ft-mse</a>，tag <span class="mono">mit</span></dd>
+        <dt>调用点</dt><dd class="mono">scripts/inference.py:59</dd>
+      </dl>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name plain">MediaPipe Face Mesh</span><span class="chip clear">Apache-2.0</span></div>
+      <dl class="fields">
+        <dt>来源</dt><dd>Google MediaPipe，框架与预训练模型同为 Apache-2.0</dd>
+        <dt>调用点</dt><dd class="mono">latentsync/utils/face_detector.py</dd>
+      </dl>
+      <div class="flag good">人脸链路为 YuNet + MediaPipe，<b>未使用 InsightFace</b>（其权重明确限非商业研究，是本赛道最常见的阻断项）。扫描 <span class="mono">insightface|buffalo|antelope|arcface|retinaface|scrfd</span> 零命中。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>训练时权重</h3><span class="eyebrow">仅损失函数 · 不进入交付物</span></div>
+
+    <div class="row is-duty">
+      <div class="row-top"><span class="name">stable_syncnet.pt</span><span class="chip duty">文件级许可证待确认</span><span class="spacer"></span><span class="chip neutral">当前本地缺失</span></div>
+      <dl class="fields">
+        <dt>用途</dt><dd>StableSyncNet 音视频同步监督；在 <span class="mono">use_syncnet: true</span> 时参与 UNet 训练损失，也用于 SyncNet 准确率评估</dd>
+        <dt>来源</dt><dd><a href="https://huggingface.co/ByteDance/LatentSync-1.6">ByteDance/LatentSync-1.6</a>；README 提供单文件下载命令</dd>
+        <dt>调用点</dt><dd><span class="mono">configs/syncnet/syncnet_16_pixel_attn.yaml</span>、<span class="mono">scripts/train_unet.py</span>、<span class="mono">eval/eval_syncnet_acc.py</span></dd>
+        <dt>当前状态</dt><dd>默认路径为 <span class="mono">checkpoints/stable_syncnet.pt</span>，审计时本地文件不存在</dd>
+        <dt>许可状态</dt><dd>托管仓库整体标注为 <span class="mono">openrail++</span>，但未见该文件与许可证的一对一声明，因此暂记为 <b>NOASSERTION</b>，不能直接沿用 UNet 权重的结论</dd>
+      </dl>
+      <div class="flag"><b>待办：</b>在用于训练、向客户交付训练流程或分发该文件前，向 ByteDance 获取文件级许可证依据，并将确认结果补入本清单。</div>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">vit_g_hybrid_pt_1200e_ssv2_ft.pth</span><span class="chip clear">Apache-2.0</span><span class="spacer"></span><span class="chip neutral">来源已修正</span></div>
+      <dl class="fields">
+        <dt>用途</dt><dd>TREPA 时序一致性损失的特征提取器（VideoMAEv2，ViT-giant）</dd>
+        <dt>来源</dt><dd><a href="https://huggingface.co/OpenGVLab/VideoMAE2/tree/main/mae-g">OpenGVLab/VideoMAE2 · mae-g/</a>，tag <span class="mono">apache-2.0</span></dd>
+        <dt>字节数</dt><dd class="mono">2,023,804,201</dd>
+        <dt>作者</dt><dd>Wang, Huang, Zhao, Tong, He, Wang, Wang, Qiao — CVPR 2023。OpenGVLab 即上海 AI Lab 通用视觉团队，为作者官方渠道</dd>
+      </dl>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">vgg16-397923af.pth</span><span class="chip infer">推定 BSD-3-Clause</span><span class="spacer"></span><span class="chip duty">无权重级声明</span></div>
+      <dl class="fields">
+        <dt>用途</dt><dd>LPIPS 感知损失的冻结骨干，仅 stage2 生效</dd>
+        <dt>来源</dt><dd class="mono scroll">https://download.pytorch.org/models/vgg16-397923af.pth</dd>
+        <dt>字节数</dt><dd class="mono">553,433,881</dd>
+        <dt>声明状态</dt><dd><b>PyTorch 官方从未声明预训练权重的许可。</b>该文件不在 <span class="mono">pytorch/vision</span> 仓库内，而托管于独立 CDN，仓库 LICENSE 并不自动覆盖它</dd>
+        <dt>推定依据</dt><dd>① 权重系 PyTorch 团队自行重训（ImageNet top-1 71.592%），著作权归属清晰，无第三方权利人　② <a href="https://github.com/pytorch/vision/blob/main/LICENSE">pytorch/vision LICENSE</a> BSD-3-Clause 授权语涵盖 “source and binary forms”，权重为该项目自有渠道分发的二进制产物　③ <a href="https://huggingface.co/timm/vgg16.tv_in1k">timm/vgg16.tv_in1k</a> 由 HF 以显式 tag <span class="mono">bsd-3-clause</span> 重新发布，model card 注明 “original torchvision weights”</dd>
+        <dt>训练数据</dt><dd>ImageNet-1K。其 ToS 仅约束 “the Database”，全文未提及训练所得模型</dd>
+      </dl>
+      <div class="flag"><b>此项为推定，非声明。</b>PyTorch 论坛曾有用户就此提问并直接 @ torchvision 维护者，<b>未获官方答复</b>。依据 ③ 中 timm 的 tag 系第三方重新标注，非原始权利人声明。风险实际可忽略——权利人身份清晰且无主张动机，历史上零主张记录——但本清单不将其记为已声明的事实。<b>仅训练阶段 stage2 加载，不进入任何交付物。</b></div>
+    </div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name">lpips/weights/v0.1/vgg.pth</span><span class="chip derived">BSD-2-Clause · 随仓库覆盖</span></div>
+      <dl class="fields">
+        <dt>用途</dt><dd>LPIPS 的 5 个 1×1 卷积标定层，共 1,472 个参数</dd>
+        <dt>来源</dt><dd><a href="https://github.com/richzhang/PerceptualSimilarity">richzhang/PerceptualSimilarity</a>，SPDX <span class="mono">BSD-2-Clause</span></dd>
+        <dt>字节数</dt><dd class="mono">7,289</dd>
+        <dt>声明状态</dt><dd>README <b>未单独声明权重许可</b>，但该文件<b>位于仓库内</b>并随 pip 包一同分发，落入 LICENSE 中 “this software and associated documentation files” 的范围。较 <span class="mono">vgg16-397923af.pth</span> 的推定显著更强——后者根本不在仓库里</dd>
+        <dt>引用义务</dt><dd>Zhang, Isola, Efros, Shechtman, Wang. <em>The Unreasonable Effectiveness of Deep Features as a Perceptual Metric.</em> CVPR 2018</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>代码</h3></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>模块</th><th>来源</th><th>许可证</th></tr></thead>
+        <tbody>
+          <tr><td class="pkg">latentsync/ 本体</td><td>ByteDance LatentSync</td><td class="lic">Apache-2.0</td></tr>
+          <tr><td class="pkg">models/ · pipelines/</td><td>AnimateDiff · diffusers 衍生</td><td class="lic">Apache-2.0</td></tr>
+          <tr><td class="pkg">whisper/audio2feature.py</td><td>MuseTalk 衍生（Tencent Music）</td><td class="lic">MIT</td></tr>
+          <tr><td class="pkg">whisper/whisper/</td><td>OpenAI Whisper</td><td class="lic">MIT</td></tr>
+          <tr><td class="pkg">trepa/third_party/</td><td>OpenGVLab VideoMAEv2</td><td class="lic">MIT</td></tr>
+          <tr><td class="pkg">utils/affine_transform.py</td><td>本次重写，依 Umeyama 1991 公式独立实现</td><td class="lic">Apache-2.0</td></tr>
+          <tr><td class="pkg">utils/audio.py</td><td>本次重写，仅用 librosa / NumPy 公开 API</td><td class="lic">Apache-2.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>运行时依赖</h3></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>包</th><th>许可证</th><th>包</th><th>许可证</th></tr></thead>
+        <tbody>
+          <tr><td class="pkg">diffusers</td><td class="lic">Apache-2.0</td><td class="pkg">librosa</td><td class="lic">ISC</td></tr>
+          <tr><td class="pkg">transformers</td><td class="lic">Apache-2.0</td><td class="pkg">scenedetect</td><td class="lic">BSD-3-Clause</td></tr>
+          <tr><td class="pkg">accelerate</td><td class="lic">Apache-2.0</td><td class="pkg">omegaconf</td><td class="lic">BSD-3-Clause</td></tr>
+          <tr><td class="pkg">huggingface-hub</td><td class="lic">Apache-2.0</td><td class="pkg">numpy</td><td class="lic">BSD-3-Clause</td></tr>
+          <tr><td class="pkg">mediapipe</td><td class="lic">Apache-2.0</td><td class="pkg">imageio</td><td class="lic">BSD-2-Clause</td></tr>
+          <tr><td class="pkg">kornia</td><td class="lic">Apache-2.0</td><td class="pkg">lpips</td><td class="lic">BSD-2-Clause</td></tr>
+          <tr><td class="pkg">opencv-python</td><td class="lic">Apache-2.0</td><td class="pkg">einops</td><td class="lic">MIT</td></tr>
+          <tr><td class="pkg">decord</td><td class="lic">Apache-2.0</td><td class="pkg">DeepCache</td><td class="lic">Apache-2.0</td></tr>
+          <tr><td class="pkg">gradio</td><td class="lic">Apache-2.0</td><td class="pkg">tensorboard</td><td class="lic">Apache-2.0</td></tr>
+          <tr><td class="pkg">ffmpeg-python</td><td class="lic">Apache-2.0</td><td class="pkg">imageio-ffmpeg</td><td class="lic">BSD-2-Clause</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-note" style="margin-top:14px">注：<span class="mono">imageio-ffmpeg</span> 与 <span class="mono">opencv-python</span> 的 wheel 内含 FFmpeg 二进制（LGPL 构建）。若改为分发 GPL 构建的 FFmpeg（如启用 x264），会触发 GPL 传染；以独立进程调用系统 ffmpeg 则不受影响。</p>
+  </section>
+
+
+  <div class="part">
+    <span class="num">专项分析</span>
+    <h2>上游权重本身是否合规</h2>
+    <p>ByteDance 在训练与数据管线中使用了无授权代码与来源存疑的评估权重。核心问题是：由此产出的 <span class="mono">latentsync_unet.pt</span> 是否因此受污染，进而影响我方的使用权？</p>
+  </div>
+
+  <section>
+    <div class="sec-head"><h3>按组件在流程中的位置分层</h3></div>
+    <p class="sec-note">判断的关键不是「用没用过」，而是「有没有进入梯度路径」——即是否有第三方的表达被写入模型参数。</p>
+
+    <div class="path">
+      <div class="path-band inside">
+        <div class="hdr"><strong>① 梯度路径内</strong><span class="chip clear">真正塑造权重</span></div>
+        <ul>
+          <li><span class="mono">recon_loss</span> — 纯 MSE，无第三方组件</li>
+          <li><span class="mono">sync_loss</span> → <b>StableSyncNet</b>：ByteDance 自有架构、自训权重，Apache-2.0</li>
+          <li><span class="mono">lpips_loss</span> → LPIPS（BSD-2）+ torchvision VGG16（BSD-3）</li>
+          <li><span class="mono">trepa_loss</span> → VideoMAEv2（Apache-2.0）</li>
+        </ul>
+        <p class="why">梯度路径中<b>不含任何无授权组件</b>。尤其注意：训练损失使用的 SyncNet 是 ByteDance 自己的 StableSyncNet，与来源存疑的 Oxford <span class="mono">syncnet_v2.model</span> 无关。</p>
+      </div>
+      <div class="path-band">
+        <div class="hdr"><strong>② 数据预处理与筛选</strong><span class="chip neutral">决定训练集构成</span></div>
+        <ul>
+          <li>人脸对齐 → <span class="mono">affine_transform.py</span>（StyleSync 血统，无许可证）</li>
+          <li><span class="mono">sync_av.py</span> → 以 SyncNet 置信度筛除视频、校正音画偏移（<span class="mono">syncnet_v2.model</span>）</li>
+          <li><span class="mono">filter_visual_quality.py</span> → hyperIQA 打分筛除低质视频（<span class="mono">koniq_pretrained.pkl</span>）</li>
+        </ul>
+        <p class="why">这些组件只决定「哪些视频进入训练、如何裁剪」，其自身的代码表达并未进入模型参数。数据筛选器对权重的关联比损失函数更弱——它不提供任何梯度信号，只做取舍。</p>
+      </div>
+      <div class="path-band">
+        <div class="hdr"><strong>③ 训练后评估</strong><span class="chip neutral">零影响</span></div>
+        <ul>
+          <li>validation 同步置信度（<span class="mono">syncnet_v2.model</span>，原 <span class="mono">train_unet.py:489</span>）</li>
+          <li>FVD（<span class="mono">i3d_torchscript.pt</span>）、hyperIQA 画质分</li>
+        </ul>
+        <p class="why">全部在 <span class="mono">no_grad</span> 下执行，仅用于绘制曲线与论文指标，对权重无任何影响。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>结论</h3></div>
+
+    <div class="row is-clear">
+      <div class="row-top"><span class="name plain">权重的可用性不因上述组件受影响</span><span class="chip clear">但非无风险</span></div>
+      <p style="margin:0 0 10px;font-size:14px;color:var(--ink-2)"><b>版权路径：</b>要使这些组件的权利人触及权重，需先证明权重是其代码的衍生作品。数据筛选器与评估器没有任何表达进入参数；<span class="mono">affine_transform</span> 产出的是裁剪后的图像，而非代码表达的复制。在最接近的判例中，<a href="https://www.aivortex.io/legal/ai-case-law/andersen-v-stability-ai/">Andersen v. Stability AI</a> 法院<b>驳回了「模型本身即衍生作品」的理论</b>（该案针对训练数据，庭审定于 2026-09-08）。</p>
+      <p style="margin:0 0 10px;font-size:14px;color:var(--ink-2)"><b>合同路径：</b>StyleSync 与 Wav2Lip 的条款中<b>均无反蒸馏条款</b>（即「禁止用本软件训练其他模型」）。此类条款在 LLaMA、OpenAI ToS 中普遍存在，其存在本身即说明：单靠版权法够不着这件事，必须另行以合同约定。Wav2Lip README 中的商用禁止针对的是<b>其自身的预训练模型</b>（因训练于 LRS2），并非用其代码训练的其他模型。</p>
+      <p style="margin:0;font-size:14px;color:var(--ink-2)"><b>传导路径：</b>纵使 ByteDance 因分发无授权代码被追责，救济指向 ByteDance。原作者对权重无所有权基础，且我方与其并无合同关系。ByteDance 对权重的 OpenRAIL++ 授权处分的是其自身权利，为 perpetual 且 irrevocable，不因其对第三方的违约而失效。</p>
+    </div>
+
+    <div class="row is-duty">
+      <div class="row-top"><span class="name plain">真正的权重风险来自别处</span><span class="chip duty">按量级排序</span></div>
+      <dl class="fields">
+        <dt>风险 1</dt><dd><b>上游训练数据来源不明。</b>配置指向 ByteDance 内部路径，且仓库含 <span class="mono">tools/download_web_videos.py</span>，部分数据可能来自网络抓取。OpenRAIL++ 第 IV 节以 “AS IS” 提供，<b>明确不保证 non-infringement，无 indemnification</b>。此项无法通过本项目内的改动消除</dd>
+        <dt>风险 2</dt><dd><b>OpenRAIL++ 使用限制未向下游传递。</b>可控，见下方义务清单</dd>
+        <dt>风险 3</dt><dd>无授权组件的传导 — <b>依上述分析，为三者中最低</b></dd>
+      </dl>
+      <div class="flag">2025 年以来的判决（<em>Bartz v. Anthropic</em>、<em>Kadrey v. Meta</em>）确立的分野是：<b>合法获取的语料训练可主张合理使用，盗版语料则否</b>。举证焦点因此转向数据来源。这使风险 1 的量级显著高于风险 3——大客户尽调时会问训练数据来源，而不会问用了什么评估脚本。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h3>遗留义务</h3><span class="eyebrow">OpenRAIL++-M · 需法务动作</span></div>
+    <p class="sec-note">以下 5 项均源自 UNet 权重的许可证，是本次核查唯一需在产品与合同层面落实的事项。</p>
+    <ol class="duties">
+      <li><b>向下游传递使用限制。</b>分发权重、SDK 或微调产物时，须在自有协议中原样纳入 Attachment A 的 11 条限制。权重无法被重新许可为 Apache-2.0 或 MIT。</li>
+      <li><b>随附许可证副本，并显著标注修改。</b>微调、蒸馏、量化均属修改，需注明。</li>
+      <li><b>产品内建肖像同意流程。</b>Attachment A 第 3、4、5 条禁止未经同意的冒充、有害虚假信息与诽谤骚扰——对唇形同步产品，这要求上传素材时有授权确认环节与可执行的滥用处置流程。</li>
+      <li><b>接受无侵权担保。</b>许可证以 “AS IS” 提供，明确不保证 non-infringement，亦无 indemnification。对应上文风险 1。</li>
+      <li><b>预备来源问询的答复。</b>OpenRAIL++ 非 OSI 认证开源许可，部分企业采购的自动化扫描会标记为受限而触发人工审查；大客户亦可能要求训练数据来源声明与赔偿条款。</li>
+    </ol>
+  </section>
+
+  <div class="footnote">
+    <p>本清单基于对各项目 LICENSE 文件、GitHub API 返回的 SPDX 标识、模型仓库 license tag 与官方声明的直接核查，来源链接均已在文中标注。哈希与字节数取自本地 <span class="mono">checkpoints/</span> 实际文件。</p>
+    <p>本文档为工程侧的合规梳理，不构成法律意见。OpenRAIL++ 义务的具体落地条款、以及上游训练数据来源风险的承担方式，建议由法务确认。</p>
+  </div>
+
+</div>
+</body>
+</html>

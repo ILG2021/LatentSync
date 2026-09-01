@@ -28,6 +28,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import diffusers
@@ -44,17 +45,53 @@ from latentsync.utils.util import (
     init_dist,
     cosine_loss,
     one_step_sampling,
+    read_audio,
 )
-from latentsync.utils.util import plot_loss_chart
+from latentsync.utils.audio import melspectrogram
 from latentsync.whisper.audio2feature import Audio2Feature
 from latentsync.trepa.loss import TREPALoss
-from eval.syncnet import SyncNetEval
-from eval.syncnet_detect import SyncNetDetector
-from eval.eval_sync_conf import syncnet_eval
 import lpips
 
 
 logger = get_logger(__name__)
+
+
+@torch.no_grad()
+def validation_sync_confidence(syncnet, generated_faces, audio_path, syncnet_config, device):
+    """Score generated validation faces with the StableSyncNet used by training."""
+    num_frames = syncnet_config.data.num_frames
+    mel_window_length = math.ceil(num_frames / 5 * 16)
+    audio_samples = read_audio(audio_path, syncnet_config.data.audio_sample_rate)
+    original_mel = torch.from_numpy(melspectrogram(audio_samples.cpu().numpy()))
+    confidences = []
+
+    for start_idx in range(0, len(generated_faces) - num_frames + 1, num_frames):
+        frames = generated_faces[start_idx : start_idx + num_frames]
+        if frames.shape[-1] != syncnet_config.data.resolution:
+            frames = F.interpolate(
+                frames,
+                size=(syncnet_config.data.resolution, syncnet_config.data.resolution),
+                mode="bicubic",
+            )
+        frames = rearrange(frames, "f c h w -> 1 (f c) h w")
+        if syncnet_config.data.lower_half:
+            frames = frames[:, :, frames.shape[2] // 2 :, :]
+
+        mel_start_idx = int(80.0 * (start_idx / float(syncnet_config.data.video_fps)))
+        mel = original_mel[:, mel_start_idx : mel_start_idx + mel_window_length].unsqueeze(0)
+        if mel.shape[-1] != mel_window_length:
+            break
+
+        vision_embeds, audio_embeds = syncnet(
+            frames.to(device=device, dtype=torch.float16),
+            mel.to(device=device, dtype=torch.float16),
+        )
+        confidence = F.cosine_similarity(vision_embeds.float(), audio_embeds.float()).mean()
+        confidences.append(confidence.item())
+
+    if not confidences:
+        raise RuntimeError("Validation output is too short to calculate StableSyncNet confidence")
+    return sum(confidences) / len(confidences)
 
 
 def main(config):
@@ -84,9 +121,9 @@ def main(config):
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
         os.makedirs(f"{output_dir}/val_videos", exist_ok=True)
-        os.makedirs(f"{output_dir}/sync_conf_results", exist_ok=True)
         shutil.copy(config.unet_config_path, output_dir)
         shutil.copy(config.data.syncnet_config_path, output_dir)
+        writer = SummaryWriter(log_dir=os.path.join(output_dir, "tensorboard"))
 
     device = torch.device(local_rank)
 
@@ -102,11 +139,6 @@ def main(config):
 
     if config.run.pixel_space_supervise:
         vae.enable_gradient_checkpointing()
-
-    syncnet_eval_model = SyncNetEval(device=device)
-    syncnet_eval_model.loadParameters("checkpoints/auxiliary/syncnet_v2.model")
-
-    syncnet_detector = SyncNetDetector(device=device, detect_results_dir="detect_results")
 
     if config.model.cross_attention_dim == 768:
         whisper_model_path = "checkpoints/whisper/small.pt"
@@ -248,10 +280,6 @@ def main(config):
         desc="Steps",
         disable=not is_main_process,
     )
-
-    train_step_list = []
-    val_step_list = []
-    sync_conf_list = []
 
     # Support mixed-precision training
     scaler = torch.amp.GradScaler("cuda") if config.run.mixed_precision_training else None
@@ -419,8 +447,6 @@ def main(config):
                 + trepa_loss * config.run.trepa_loss_weight
             )
 
-            train_step_list.append(global_step)
-
             optimizer.zero_grad()
 
             # Backpropagate
@@ -446,6 +472,14 @@ def main(config):
             progress_bar.update(1)
             global_step += 1
 
+            if is_main_process:
+                writer.add_scalar("train/loss", loss.item(), global_step)
+                writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
+                writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
+                writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
+                writer.add_scalar("train/trepa_loss", float(trepa_loss), global_step)
+                writer.add_scalar("train/learning_rate", lr_scheduler.get_last_lr()[0], global_step)
+
             ### <<<< Training <<<< ###
 
             # Save checkpoint and conduct validation
@@ -467,7 +501,7 @@ def main(config):
                 validation_video_out_path = os.path.join(output_dir, f"val_videos/val_video_{global_step}.mp4")
 
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    pipeline(
+                    generated_faces = pipeline(
                         config.data.val_video_path,
                         config.data.val_audio_path,
                         validation_video_out_path,
@@ -478,23 +512,26 @@ def main(config):
                         width=config.data.resolution,
                         height=config.data.resolution,
                         mask_image_path=config.data.mask_image_path,
+                        return_generated_faces=True,
                     )
 
                 logger.info(f"Saved validation video output to {validation_video_out_path}")
 
-                val_step_list.append(global_step)
-
-                if config.model.add_audio_layer and os.path.exists(validation_video_out_path):
+                if config.model.add_audio_layer and config.run.use_syncnet:
                     try:
-                        _, conf = syncnet_eval(syncnet_eval_model, syncnet_detector, validation_video_out_path, "temp")
+                        conf = validation_sync_confidence(
+                            syncnet,
+                            generated_faces,
+                            config.data.val_audio_path,
+                            syncnet_config,
+                            device,
+                        )
+                        writer.add_scalar("validation/sync_confidence", conf, global_step)
+                        logger.info(f"Validation StableSyncNet confidence at step {global_step}: {conf:.4f}")
                     except Exception as e:
-                        logger.info(e)
-                        conf = 0
-                    sync_conf_list.append(conf)
-                    plot_loss_chart(
-                        os.path.join(output_dir, f"sync_conf_results/sync_conf_chart-{global_step}.png"),
-                        ("Sync confidence", val_step_list, sync_conf_list),
-                    )
+                        logger.warning(f"Unable to calculate validation sync confidence: {type(e).__name__} - {e}")
+
+                writer.flush()
 
             logs = {"step_loss": loss.item(), "epoch": epoch}
             progress_bar.set_postfix(**logs)
@@ -503,6 +540,8 @@ def main(config):
                 break
 
     progress_bar.close()
+    if is_main_process:
+        writer.close()
     dist.destroy_process_group()
 
 

@@ -20,7 +20,6 @@ import shutil
 
 from latentsync.data.syncnet_dataset import SyncNetDataset
 from latentsync.models.stable_syncnet import StableSyncNet
-from latentsync.models.wav2lip_syncnet import Wav2LipSyncNet
 from latentsync.utils.util import gather_loss, plot_loss_chart
 from accelerate.utils import set_seed
 
@@ -115,7 +114,6 @@ def main(config):
 
     # Model
     syncnet = StableSyncNet(OmegaConf.to_container(config.model)).to(device)
-    # syncnet = Wav2LipSyncNet().to(device)
 
     optimizer = torch.optim.AdamW(
         list(filter(lambda p: p.requires_grad, syncnet.parameters())), lr=config.optimizer.lr
