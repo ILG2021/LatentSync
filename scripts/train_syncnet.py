@@ -46,7 +46,9 @@ def main(config):
     set_seed(seed)
 
     # Logging folder
-    folder_name = "train" + datetime.datetime.now().strftime(f"-%Y_%m_%d-%H:%M:%S")
+    # "%H-%M-%S" rather than "%H:%M:%S": a colon is not a legal filename character on
+    # Windows, and os.makedirs below would fail with WinError 123.
+    folder_name = "train" + datetime.datetime.now().strftime("-%Y_%m_%d-%H-%M-%S")
     output_dir = os.path.join(config.data.train_output_dir, folder_name)
 
     # Make one log on every process with the configuration for debugging.

@@ -25,7 +25,7 @@ paths = []
 
 def gather_video_paths(input_dir, output_dir):
     for video in sorted(os.listdir(input_dir)):
-        if video.endswith(".mp4"):
+        if video.lower().endswith(".mp4"):
             video_input = os.path.join(input_dir, video)
             video_output = os.path.join(output_dir, video)
             if os.path.isfile(video_output):
@@ -40,18 +40,28 @@ def combine_video_audio(video_frames, video_input_path, video_output_path, proce
     audio_temp = os.path.join(process_temp_dir, f"{video_name}_temp.wav")
     video_temp = os.path.join(process_temp_dir, f"{video_name}_temp.mp4")
 
-    write_video(video_temp, video_frames, fps=25)
+    try:
+        write_video(video_temp, video_frames, fps=25)
 
-    # Explicitly map audio stream to avoid issues with other metadata streams
-    command = f'ffmpeg -y -loglevel info -i "{video_input_path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "{audio_temp}"'
-    subprocess.run(command, shell=True)
+        # Explicitly map audio stream to avoid issues with other metadata streams
+        command = (
+            f'ffmpeg -y -loglevel info -i "{video_input_path}" -vn -acodec pcm_s16le '
+            f'-ar 16000 -ac 1 "{audio_temp}"'
+        )
+        subprocess.run(command, shell=True, check=True)
 
-    os.makedirs(os.path.dirname(video_output_path), exist_ok=True)
-    command = f'ffmpeg -y -loglevel info -i "{video_temp}" -i "{audio_temp}" -c:v libx264 -c:a aac -map 0:v -map 1:a -q:v 0 -q:a 0 "{video_output_path}"'
-    subprocess.run(command, shell=True)
-
-    os.remove(audio_temp)
-    os.remove(video_temp)
+        os.makedirs(os.path.dirname(video_output_path), exist_ok=True)
+        command = (
+            f'ffmpeg -y -loglevel info -i "{video_temp}" -i "{audio_temp}" -c:v libx264 -c:a aac '
+            f'-map 0:v -map 1:a -q:v 0 -q:a 0 "{video_output_path}"'
+        )
+        subprocess.run(command, shell=True, check=True)
+    finally:
+        # Without this the next clip inherits a stale temp file, and a failed audio extraction used
+        # to raise FileNotFoundError here and take the whole worker process down with it.
+        for temp_path in (audio_temp, video_temp):
+            if os.path.isfile(temp_path):
+                os.remove(temp_path)
 
 
 def func(paths, process_temp_dir, device_id, resolution):
@@ -68,7 +78,11 @@ def func(paths, process_temp_dir, device_id, resolution):
             continue
 
         os.makedirs(os.path.dirname(video_output), exist_ok=True)
-        combine_video_audio(video_frames, video_input, video_output, process_temp_dir)
+        try:
+            combine_video_audio(video_frames, video_input, video_output, process_temp_dir)
+        except Exception as e:
+            print(f"Failed to combine audio and video: {type(e).__name__} - {e} - {video_input}")
+            continue
         print(f"Saved: {video_output}")
 
 
@@ -95,8 +109,16 @@ def affine_transform_multi_gpus(input_dir, output_dir, temp_dir, resolution, num
     for i in range(num_devices):
         for j in range(num_workers):
             process_index = i * num_workers + j
+            # One temp dir per process, not per device: workers on the same GPU would otherwise
+            # share it and clobber each other's temp files whenever two clips share a basename.
             process = Process(
-                target=func, args=(split_paths[process_index], os.path.join(temp_dir, f"process_{i}"), i, resolution)
+                target=func,
+                args=(
+                    split_paths[process_index],
+                    os.path.join(temp_dir, f"process_{process_index}"),
+                    i,
+                    resolution,
+                ),
             )
             process.start()
             processes.append(process)

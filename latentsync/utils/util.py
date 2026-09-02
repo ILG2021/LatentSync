@@ -139,8 +139,12 @@ def write_video_cv2(video_output_path: str, video_frames: np.ndarray, fps: int):
     out.release()
 
 
-def init_dist(backend="nccl", **kwargs):
+def init_dist(backend=None, **kwargs):
     """Initializes distributed environment."""
+    if backend is None:
+        # PyTorch's Windows builds ship without NCCL, so even a single-process run has to fall
+        # back to gloo there.
+        backend = "nccl" if dist.is_nccl_available() else "gloo"
     rank = int(os.environ["RANK"])
     num_gpus = torch.cuda.device_count()
     if num_gpus == 0:
@@ -256,7 +260,7 @@ def gather_video_paths_recursively(input_dir):
 
 def gather_video_paths(input_dir, paths):
     for file in sorted(os.listdir(input_dir)):
-        if file.endswith(".mp4"):
+        if file.lower().endswith(".mp4"):
             filepath = os.path.join(input_dir, file).replace("\\", "/")
             paths.append(filepath)
         elif os.path.isdir(os.path.join(input_dir, file)):

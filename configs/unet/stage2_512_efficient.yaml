@@ -1,25 +1,40 @@
+# Stage2 at 512 resolution with the memory cuts from stage2_efficient:
+#   trepa_loss_weight: 0        -> VideoMAEv2 is never instantiated (the single biggest saving)
+#   trainable_modules: attn2.   -> only the audio cross-attention, not every attention block
+#   motion_module_decoder_only  -> temporal layers in the decoder only
+# stage2_512.yaml needs ~55 GB; this trades temporal-consistency loss and some trainable capacity
+# for a much smaller footprint. If it still does not fit, next cut perceptual_loss_weight to 0
+# (drops LPIPS/VGG), and as a last resort pixel_space_supervise to false -- that disables the sync,
+# perceptual and TREPA losses entirely and leaves reconstruction-only training of the motion layers.
 data:
   syncnet_config_path: configs/syncnet/syncnet_16_pixel_attn.yaml
-  train_output_dir: debug/unet
-  train_fileslist: /mnt/bn/maliva-gen-ai-v2/chunyu.li/fileslist/data_v10_core.txt
+  train_output_dir: debug/unet/stage2
+  train_fileslist: my_data/fileslist.txt
   train_data_dir: ""
-  audio_embeds_cache_dir: /mnt/bn/maliva-gen-ai-v2/chunyu.li/audio_cache/embeds
-  audio_mel_cache_dir: /mnt/bn/maliva-gen-ai-v2/chunyu.li/audio_cache/mel
+  audio_embeds_cache_dir: my_data/cache/embeds
+  audio_mel_cache_dir: my_data/cache/mel
 
   val_video_path: assets/demo1_video.mp4
   val_audio_path: assets/demo1_audio.wav
   batch_size: 1 # 4
-  num_workers: 12 # 12
+  num_workers: 8
   num_frames: 16
-  resolution: 256
+  resolution: 512
   mask_image_path: latentsync/utils/mask.png
   audio_sample_rate: 16000
   video_fps: 25
   audio_feat_length: [2, 2]
 
 ckpt:
-  resume_ckpt_path: checkpoints/latentsync_unet.pt
-  save_ckpt_steps: 10000
+  # "auto": resume this stage's own newest checkpoint under train_output_dir if there is one,
+  # otherwise start from the newest checkpoint under resume_search_dir (the previous stage).
+  # Set an explicit path to pin a specific checkpoint.
+  resume_ckpt_path: auto
+  resume_search_dir: debug/unet/stage1
+  save_ckpt_steps: 5000
+  # Keep only the newest N checkpoints. Each is ~5 GB of weights plus a ~2.5 GB
+  # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
+  max_keep_ckpts: 10
 
 run:
   pixel_space_supervise: true
@@ -28,11 +43,11 @@ run:
   perceptual_loss_weight: 0.1 # 0.1
   recon_loss_weight: 1 # 1
   guidance_scale: 1.5 # [1.0 - 3.0]
-  trepa_loss_weight: 10
+  trepa_loss_weight: 0
   inference_steps: 20
   trainable_modules:
     - motion_modules.
-    - attentions.
+    - attn2.
   seed: 1247
   use_mixed_noise: true
   mixed_noise_alpha: 1 # 1
@@ -47,6 +62,9 @@ optimizer:
   max_grad_norm: 1.0
   lr_scheduler: constant
   lr_warmup_steps: 0
+  # Quantise AdamW's two moments to 8 bits block-wise. Saves ~7 GiB on the full-parameter
+  # stage1 and ~4 GiB on stage2. Requires bitsandbytes.
+  use_8bit_adam: true
 
 model:
   act_fn: silu
@@ -85,7 +103,7 @@ model:
   use_motion_module: true
   motion_module_resolutions: [1, 2, 4, 8]
   motion_module_mid_block: false
-  motion_module_decoder_only: false
+  motion_module_decoder_only: true
   motion_module_type: Vanilla
   motion_module_kwargs:
     num_attention_heads: 8

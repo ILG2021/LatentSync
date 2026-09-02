@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import shutil
 from multiprocessing import Pool
 import tqdm
 
@@ -20,24 +21,47 @@ from latentsync.utils.av_reader import AVReader
 from latentsync.utils.util import gather_video_paths_recursively
 
 
-def remove_broken_video(video_path):
+def quarantine_broken_video(args):
+    """Move a video that decord cannot open out of the dataset, instead of deleting it.
+
+    AVReader builds the AudioReader first, so this also catches videos with no audio track. Those
+    would otherwise survive `resample_fps_hz` (its `-map 0:a:0?` makes audio optional) and then kill
+    an affine transform worker when combine_video_audio fails to extract the audio.
+
+    We move rather than delete: `input_dir` holds the original footage, and a bare `except` also
+    fires on transient failures such as running out of file handles under a large worker pool.
+    """
+    video_path, input_dir, quarantine_dir = args
     try:
         AVReader(video_path)
-    except Exception:
-        os.remove(video_path)
+    except Exception as e:
+        # Mirror the layout under input_dir instead of flattening to a basename: two clips with the
+        # same name in different subdirectories would otherwise overwrite each other here.
+        destination = os.path.join(quarantine_dir, os.path.relpath(video_path, input_dir))
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.move(video_path, destination)
+        print(f"Quarantined: {video_path} - {type(e).__name__}: {e}")
+        return video_path
+    return None
 
 
-def remove_broken_videos_multiprocessing(input_dir, num_workers):
+def remove_broken_videos_multiprocessing(input_dir, num_workers, quarantine_dir=None):
     video_paths = gather_video_paths_recursively(input_dir)
+    if quarantine_dir is None:
+        quarantine_dir = os.path.join(os.path.dirname(os.path.abspath(input_dir)), "broken")
+    tasks = [(video_path, input_dir, quarantine_dir) for video_path in video_paths]
 
-    print("Removing broken videos...")
+    print("Quarantining broken videos...")
     with Pool(num_workers) as pool:
-        for _ in tqdm.tqdm(pool.imap_unordered(remove_broken_video, video_paths), total=len(video_paths)):
-            pass
+        results = list(tqdm.tqdm(pool.imap_unordered(quarantine_broken_video, tasks), total=len(tasks)))
+
+    quarantined = [video_path for video_path in results if video_path is not None]
+    if quarantined:
+        print(f"Quarantined {len(quarantined)} broken videos to {quarantine_dir}")
 
 
 if __name__ == "__main__":
-    input_dir = "/mnt/bn/maliva-gen-ai-v2/chunyu.li/VoxCeleb2/raw"
-    num_workers = 50
+    input_dir = "my_data/raw"
+    num_workers = 8
 
     remove_broken_videos_multiprocessing(input_dir, num_workers)

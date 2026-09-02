@@ -23,6 +23,49 @@ from .affine_transform import AlignRestore
 from .face_detector import FaceDetector
 
 
+# A face detector misses the occasional frame (a blink, a fast turn, a hand crossing the face).
+# Dropping the whole clip for that would be wasteful, so short runs of missing landmarks are filled
+# in from their neighbours. Longer runs mean the face really is gone and the clip is unusable.
+MAX_LANDMARK_INTERPOLATION_GAP = 25
+
+
+def interpolate_missing_landmarks(landmarks, max_gap: int = MAX_LANDMARK_INTERPOLATION_GAP):
+    """Fill short runs of `None` in `landmarks` in place, by interpolating between the neighbours.
+
+    Returns (failed_index, repaired_count). `failed_index` is the first frame of the first gap that
+    was too long to fill, or None when every gap could be repaired.
+    """
+    valid_indices = [index for index, value in enumerate(landmarks) if value is not None]
+    if not valid_indices:
+        return 0, 0
+
+    repaired_count = len(landmarks) - len(valid_indices)
+    missing_start = None
+    for index in range(len(landmarks) + 1):
+        is_missing = index < len(landmarks) and landmarks[index] is None
+        if is_missing and missing_start is None:
+            missing_start = index
+        elif not is_missing and missing_start is not None:
+            if index - missing_start > max_gap:
+                return missing_start, repaired_count
+
+            left_index = missing_start - 1
+            right_index = index if index < len(landmarks) else None
+            for missing_index in range(missing_start, index):
+                if left_index < 0:
+                    landmarks[missing_index] = landmarks[right_index].copy()
+                elif right_index is None:
+                    landmarks[missing_index] = landmarks[left_index].copy()
+                else:
+                    weight = (missing_index - left_index) / (right_index - left_index)
+                    landmarks[missing_index] = (
+                        landmarks[left_index] * (1.0 - weight) + landmarks[right_index] * weight
+                    )
+            missing_start = None
+
+    return None, repaired_count
+
+
 def load_fixed_mask(resolution: int, mask_image_path="latentsync/utils/mask.png") -> torch.Tensor:
     mask_image = cv2.imread(mask_image_path)
     mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
@@ -112,10 +155,27 @@ class VideoProcessor:
 
     def affine_transform_video(self, video_path):
         video_frames = read_video(video_path, change_fps=False)
+
+        # Detect the whole track first, then repair it, then align: the same order the inference
+        # pipeline uses. Aligning frame by frame would abort the clip on the first missed face.
+        landmarks = [self.image_processor.detect_face_landmarks(frame) for frame in video_frames]
+        failed_index, repaired_count = interpolate_missing_landmarks(landmarks)
+        if failed_index is not None:
+            raise RuntimeError(
+                f"Face not detected for more than {MAX_LANDMARK_INTERPOLATION_GAP} consecutive "
+                f"frames, starting at frame {failed_index}"
+            )
+        if repaired_count:
+            print(f"Interpolated face landmarks for {repaired_count} missing frames: {video_path}")
+
+        # AlignRestore keeps a running translation offset to damp jitter. It has to start fresh for
+        # every clip, otherwise the first frames get pulled towards the previous clip's face.
+        self.image_processor.restorer.p_bias = None
+
         results = []
-        for frame in video_frames:
-            frame, _, _ = self.image_processor.affine_transform(frame)
-            results.append(frame)
+        for frame, face_landmarks in zip(video_frames, landmarks):
+            face, _, _ = self.image_processor.affine_transform_with_landmarks(frame, face_landmarks)
+            results.append(face)
         results = torch.stack(results)
 
         results = rearrange(results, "f c h w -> f h w c").numpy()

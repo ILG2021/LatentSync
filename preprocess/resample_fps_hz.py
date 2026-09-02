@@ -16,14 +16,13 @@ import os
 import subprocess
 import tqdm
 from multiprocessing import Pool
-import shutil
 
 paths = []
 
 
 def gather_paths(input_dir, output_dir):
     for video in sorted(os.listdir(input_dir)):
-        if video.endswith(".mp4"):
+        if video.lower().endswith(".mp4"):
             video_input = os.path.join(input_dir, video)
             video_output = os.path.join(output_dir, video)
             if os.path.isfile(video_output):
@@ -33,69 +32,55 @@ def gather_paths(input_dir, output_dir):
             gather_paths(os.path.join(input_dir, video), os.path.join(output_dir, video))
 
 
-def get_video_audio_info(video_path):
-    video_input_fixed = video_path.replace("\\", "/")
-    # Get FPS
-    fps_command = f'ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of default=noprint_wrappers=1:nokey=1 "{video_input_fixed}"'
-    try:
-        fps_raw = subprocess.check_output(fps_command, shell=True).decode('utf-8').strip()
-        if '/' in fps_raw:
-            num, den = fps_raw.split('/')
-            fps = float(num) / float(den) if float(den) != 0 else 0
-        else:
-            fps = float(fps_raw) if fps_raw else 0
-    except Exception:
-        fps = 0
-
-    # Get Sample Rate
-    sr_command = f'ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=noprint_wrappers=1:nokey=1 "{video_input_fixed}"'
-    try:
-        sample_rate = int(subprocess.check_output(sr_command, shell=True).decode('utf-8').strip())
-    except Exception:
-        sample_rate = 0
-    
-    return fps, sample_rate
-
-
-def resample_fps_hz(video_input, video_output):
+def resample_fps_hz(video_input, video_output, gop):
     os.makedirs(os.path.dirname(video_output), exist_ok=True)
     video_input_fixed = video_input.replace("\\", "/")
     video_output_fixed = video_output.replace("\\", "/")
-    
-    fps, sr = get_video_audio_info(video_input)
-    
-    # We ALWAYS use ffmpeg to 'clean' the streams to strip broken metadata/timecode streams
-    # Even if FPS/SR match, we MUST re-mux to remove the 'codec none' stream that breaks scenedetect
-    if round(fps) == 25 and sr == 16000:
-        print(f"Cleaning streams for {video_input}...")
-        # -map 0:v:0 -map 0:a:0? : Only take first video and first audio stream
-        # -sn -dn -map_metadata -1 : Strip subtitles, data streams, and all metadata
-        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -c copy -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
-    else:
-        print(f"Resampling/Re-encoding {video_input}...")
-        command = f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -r 25 -c:v libx264 -preset fast -crf 18 -c:a aac -ar 16000 -q:a 0 -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
-    
+
+    # We always re-encode, even when the source is already 25 FPS / 16000 Hz. Stream copying would
+    # keep the source GOP structure, and `segment_videos` can only cut on keyframes -- so without a
+    # known keyframe interval the segments come out at arbitrary lengths.
+    # -g / -keyint_min force a keyframe every `gop` frames, -sc_threshold 0 stops x264 from adding
+    # extra keyframes on scene changes, which would make the segments uneven again.
+    # -map 0:v:0 -map 0:a:0? : Only take first video and first audio stream
+    # -sn -dn -map_metadata -1 : Strip subtitles, data streams, and all metadata
+    print(f"Resampling/Re-encoding {video_input} (keyframe every {gop} frames)...")
+    command = (
+        f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -r 25 '
+        f"-c:v libx264 -preset fast -crf 18 -g {gop} -keyint_min {gop} -sc_threshold 0 "
+        f'-c:a aac -ar 16000 -q:a 0 -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
+    )
+
     result = subprocess.run(command, shell=True)
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed with exit code {result.returncode} for file {video_input}")
+        # Report instead of raising: raised inside a Pool this would abort the whole stage and the
+        # run could never get past the one bad file. Every neighbouring step logs and continues.
+        print(f"FFmpeg failed with exit code {result.returncode} for file {video_input}")
+        return video_input
+    return None
 
 
 def multi_run_wrapper(args):
     return resample_fps_hz(*args)
 
 
-def resample_fps_hz_multiprocessing(input_dir, output_dir, num_workers):
+def resample_fps_hz_multiprocessing(input_dir, output_dir, num_workers, gop=125):
     print(f"Recursively gathering video paths of {input_dir} ...")
     gather_paths(input_dir, output_dir)
+    tasks = [(video_input, video_output, gop) for video_input, video_output in paths]
 
     print(f"Resampling FPS and Hz of {input_dir} ...")
     if num_workers > 1:
         with Pool(num_workers) as pool:
-            for _ in tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, paths), total=len(paths)):
-                pass
+            results = list(tqdm.tqdm(pool.imap_unordered(multi_run_wrapper, tasks), total=len(tasks)))
     else:
-        for args in tqdm.tqdm(paths):
-            resample_fps_hz(*args)
+        results = [resample_fps_hz(*args) for args in tqdm.tqdm(tasks)]
+
+    failed = [video_input for video_input in results if video_input is not None]
+    if failed:
+        print(f"Failed to resample {len(failed)} of {len(tasks)} videos:")
+        for video_input in failed:
+            print(f"  {video_input}")
 
 
 if __name__ == "__main__":

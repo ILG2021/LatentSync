@@ -15,9 +15,11 @@
 import os
 import math
 import argparse
+import re
 import shutil
 import datetime
 import logging
+from pathlib import Path
 from omegaconf import OmegaConf
 
 from tqdm.auto import tqdm
@@ -54,6 +56,161 @@ import lpips
 
 
 logger = get_logger(__name__)
+
+# Sentinel for ckpt.resume_ckpt_path: pick up whatever the previous stage last wrote.
+AUTO_RESUME = "auto"
+
+
+def find_latest_checkpoint(train_output_dir: str):
+    """Newest `checkpoint-*.pt` under `<train_output_dir>/<run>/checkpoints/`, or None.
+
+    Run folders are named after their start time, so ordering by (folder name, step) is
+    deterministic and does not depend on file timestamps.
+    """
+    checkpoints = []
+    for checkpoint_path in Path(train_output_dir).glob("*/checkpoints/checkpoint-*.pt"):
+        match = re.fullmatch(r"checkpoint-(\d+)", checkpoint_path.stem)
+        if match:
+            run_name = checkpoint_path.parent.parent.name
+            checkpoints.append((run_name, int(match.group(1)), checkpoint_path))
+    if not checkpoints:
+        return None
+    return max(checkpoints, key=lambda item: (item[0], item[1]))[2]
+
+
+def training_state_path(checkpoint_path):
+    """Sidecar holding optimizer / scheduler / scaler state for `checkpoint_path`.
+
+    Kept out of the checkpoint itself so the weights file stays loadable by inference and stays the
+    size it is now -- the 8-bit AdamW moments alone would add about 2.5 GiB to every save.
+    """
+    return str(Path(checkpoint_path).with_suffix(".training_state.pt"))
+
+
+def save_training_state(checkpoint_path, optimizer, lr_scheduler, scaler):
+    torch.save(
+        {
+            "optimizer": optimizer.state_dict(),
+            "lr_scheduler": lr_scheduler.state_dict(),
+            "scaler": scaler.state_dict() if scaler is not None else None,
+        },
+        training_state_path(checkpoint_path),
+    )
+
+
+def load_training_state(checkpoint_path, optimizer, lr_scheduler, scaler):
+    """Restore optimizer/scheduler/scaler for a genuine same-stage resume. Returns True on success.
+
+    Without this a resumed run keeps its step counter but restarts Adam from zeroed moments, which
+    shows up as a loss spike, and replays the LR schedule from step 0 -- harmless for `constant`,
+    wrong for anything with warmup or decay.
+    """
+    state_path = training_state_path(checkpoint_path)
+    if not os.path.isfile(state_path):
+        return False
+
+    # A crash partway through save_training_state leaves a truncated sidecar, and editing
+    # trainable_modules between runs makes the saved optimizer state no longer match. Neither is a
+    # reason to refuse to train: warn, and carry on with fresh optimizer state.
+    try:
+        state = torch.load(state_path, map_location="cpu", weights_only=False)
+        optimizer.load_state_dict(state["optimizer"])
+        lr_scheduler.load_state_dict(state["lr_scheduler"])
+        if scaler is not None and state.get("scaler") is not None:
+            scaler.load_state_dict(state["scaler"])
+    except Exception as e:
+        logger.warning(f"Ignoring unusable training state {state_path}: {type(e).__name__} - {e}")
+        return False
+    return True
+
+
+def prune_checkpoints(checkpoints_dir, max_keep):
+    """Keep only the newest `max_keep` checkpoints, deleting their sidecars along with them.
+
+    A full run writes max_train_steps / save_ckpt_steps checkpoints at roughly 7.5 GB each (5 GB of
+    weights plus the training state), which is hundreds of GB on a real dataset. `max_keep` of 0 or
+    less keeps everything.
+    """
+    if not max_keep or max_keep <= 0:
+        return []
+
+    checkpoints = []
+    for checkpoint_path in Path(checkpoints_dir).glob("checkpoint-*.pt"):
+        match = re.fullmatch(r"checkpoint-(\d+)", checkpoint_path.stem)
+        if match:
+            checkpoints.append((int(match.group(1)), checkpoint_path))
+
+    removed = []
+    for _, checkpoint_path in sorted(checkpoints)[:-max_keep]:
+        for path in (checkpoint_path, Path(training_state_path(str(checkpoint_path)))):
+            if path.is_file():
+                path.unlink()
+                removed.append(path.name)
+    return removed
+
+
+def build_optimizer(config, trainable_params):
+    """AdamW, optionally keeping its moments in 8 bits.
+
+    AdamW stores two fp32 moments per parameter. For this 1.27B UNet that is 10.1 GiB on its own,
+    more than the weights and the gradients put together. bitsandbytes quantises the moments
+    block-wise -- a separate fp32 scale per block of values -- which brings that down to about
+    2.5 GiB. The per-block scale is what makes it safe: a plain fp16 moment would flush squared
+    gradients (1e-8 and below) to zero, and a bf16 one has too few mantissa bits to hold them.
+    """
+    if not config.optimizer.get("use_8bit_adam", False):
+        return torch.optim.AdamW(trainable_params, lr=config.optimizer.lr), "AdamW (fp32 states)"
+
+    try:
+        import bitsandbytes as bnb
+    except ImportError as e:
+        raise ImportError(
+            "optimizer.use_8bit_adam is set, but bitsandbytes is not installed. Install it with "
+            "`pip install bitsandbytes` -- on Blackwell (sm_120) you need a build against CUDA "
+            "12.8 -- or set optimizer.use_8bit_adam to false."
+        ) from e
+
+    return bnb.optim.AdamW8bit(trainable_params, lr=config.optimizer.lr), "AdamW8bit (bitsandbytes)"
+
+
+def resolve_resume_ckpt_path(config):
+    """Resolve ckpt.resume_ckpt_path, returning (path, keep_global_step).
+
+    "auto" resolves in two steps: this stage's own newest checkpoint under train_output_dir if
+    there is one -- an interrupted run picking up where it stopped, so its step counter carries
+    over -- otherwise the newest checkpoint under ckpt.resume_search_dir, which is the previous
+    stage. In that second case the step counter has to be dropped: it belongs to the other stage,
+    and carrying it over would put global_step past max_train_steps and the training loop would
+    exit without doing anything.
+
+    Anything other than "auto" is an explicit path, used as is with its stored step counter.
+    """
+    ckpt_path = config.ckpt.resume_ckpt_path
+    if ckpt_path != AUTO_RESUME:
+        return ckpt_path, True
+
+    train_output_dir = config.data.train_output_dir
+    own_checkpoint = find_latest_checkpoint(train_output_dir)
+    if own_checkpoint is not None:
+        return str(own_checkpoint), True
+
+    search_dir = config.ckpt.get("resume_search_dir", None)
+    if not search_dir:
+        raise ValueError(
+            f'ckpt.resume_ckpt_path is "{AUTO_RESUME}" but no checkpoint was found under '
+            f"{train_output_dir}, and no ckpt.resume_search_dir is configured to fall back to. "
+            "Set resume_search_dir to the previous stage's train_output_dir, or set "
+            "resume_ckpt_path to an explicit checkpoint path."
+        )
+
+    previous_checkpoint = find_latest_checkpoint(search_dir)
+    if previous_checkpoint is None:
+        raise ValueError(
+            f'ckpt.resume_ckpt_path is "{AUTO_RESUME}" but no checkpoint was found under '
+            f"{train_output_dir} or {search_dir}. Run the previous stage first, or set "
+            "resume_ckpt_path to an explicit checkpoint path."
+        )
+    return str(previous_checkpoint), False
 
 
 @torch.no_grad()
@@ -105,7 +262,9 @@ def main(config):
     set_seed(seed)
 
     # Logging folder
-    folder_name = "train" + datetime.datetime.now().strftime(f"-%Y_%m_%d-%H:%M:%S")
+    # "%H-%M-%S" rather than "%H:%M:%S": a colon is not a legal filename character on
+    # Windows, and os.makedirs below would fail with WinError 123.
+    folder_name = "train" + datetime.datetime.now().strftime("-%Y_%m_%d-%H-%M-%S")
     output_dir = os.path.join(config.data.train_output_dir, folder_name)
 
     # Make one log on every process with the configuration for debugging.
@@ -155,11 +314,18 @@ def main(config):
         audio_feat_length=config.data.audio_feat_length,
     )
 
+    resume_ckpt_path, keep_global_step = resolve_resume_ckpt_path(config)
+    if is_main_process:
+        continued = "resuming this stage" if keep_global_step else "initialising from the previous stage"
+        logger.info(f"Resume checkpoint ({continued}): {resume_ckpt_path}")
+
     unet, resume_global_step = UNet3DConditionModel.from_pretrained(
         OmegaConf.to_container(config.model),
-        config.ckpt.resume_ckpt_path,
+        resume_ckpt_path,
         device=device,
     )
+    if not keep_global_step:
+        resume_global_step = 0
 
     if config.model.add_audio_layer and config.run.use_syncnet:
         syncnet_config = OmegaConf.load(config.data.syncnet_config_path)
@@ -192,11 +358,12 @@ def main(config):
     if config.optimizer.scale_lr:
         config.optimizer.lr = config.optimizer.lr * num_processes
 
-    optimizer = torch.optim.AdamW(trainable_params, lr=config.optimizer.lr)
+    optimizer, optimizer_name = build_optimizer(config, trainable_params)
 
     if is_main_process:
         logger.info(f"trainable params number: {len(trainable_params)}")
         logger.info(f"trainable params scale: {sum(p.numel() for p in trainable_params) / 1e6:.3f} M")
+        logger.info(f"optimizer: {optimizer_name}")
 
     # Enable gradient checkpointing
     if config.run.enable_gradient_checkpointing:
@@ -270,6 +437,12 @@ def main(config):
         logger.info(f"  Instantaneous batch size per device = {config.data.batch_size}")
         logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
         logger.info(f"  Total optimization steps = {config.run.max_train_steps}")
+    if resume_global_step >= config.run.max_train_steps:
+        raise ValueError(
+            f"Resuming at step {resume_global_step}, which is already at or past max_train_steps "
+            f"({config.run.max_train_steps}). Training would exit without doing anything -- raise "
+            "max_train_steps, or start from a different checkpoint."
+        )
     global_step = resume_global_step
     first_epoch = resume_global_step // num_update_steps_per_epoch
 
@@ -283,6 +456,18 @@ def main(config):
 
     # Support mixed-precision training
     scaler = torch.amp.GradScaler("cuda") if config.run.mixed_precision_training else None
+
+    # Only for a genuine same-stage resume. Starting a new stage reuses the previous stage's weights
+    # but has a different trainable parameter set, so its optimizer state does not apply.
+    if keep_global_step and resume_global_step > 0:
+        if load_training_state(resume_ckpt_path, optimizer, lr_scheduler, scaler):
+            if is_main_process:
+                logger.info(f"Restored optimizer/scheduler state from {training_state_path(resume_ckpt_path)}")
+        elif is_main_process:
+            logger.warning(
+                f"No training state next to {resume_ckpt_path}; resuming with zeroed optimizer "
+                "moments and the LR schedule replayed from step 0."
+            )
 
     for epoch in range(first_epoch, num_train_epochs):
         train_dataloader.sampler.set_epoch(epoch)
@@ -495,6 +680,22 @@ def main(config):
                 except Exception as e:
                     logger.error(f"Error saving model: {e}")
 
+                # Separate from the weights save: the sidecar is only needed to resume, so losing
+                # it (a full disk, most likely) must not be reported as having lost the checkpoint.
+                try:
+                    save_training_state(model_save_path, optimizer, lr_scheduler, scaler)
+                except Exception as e:
+                    logger.error(f"Error saving training state (checkpoint itself is fine): {e}")
+
+                try:
+                    removed = prune_checkpoints(
+                        os.path.dirname(model_save_path), config.ckpt.get("max_keep_ckpts", 0)
+                    )
+                    if removed:
+                        logger.info(f"Pruned {len(removed)} old checkpoint file(s): {', '.join(removed)}")
+                except Exception as e:
+                    logger.error(f"Error pruning old checkpoints: {e}")
+
                 # Validation
                 logger.info("Running validation... ")
 
@@ -516,6 +717,12 @@ def main(config):
                     )
 
                 logger.info(f"Saved validation video output to {validation_video_out_path}")
+
+                # Peak includes the validation pipeline above, so it is the true high-water mark.
+                peak_gib = torch.cuda.max_memory_allocated(device) / 2**30
+                writer.add_scalar("train/peak_vram_gib", peak_gib, global_step)
+                logger.info(f"Peak VRAM so far: {peak_gib:.1f} GiB")
+                torch.cuda.reset_peak_memory_stats(device)
 
                 if config.model.add_audio_layer and config.run.use_syncnet:
                     try:

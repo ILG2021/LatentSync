@@ -1,10 +1,10 @@
 data:
   syncnet_config_path: configs/syncnet/syncnet_16_pixel_attn.yaml
-  train_output_dir: debug/unet
-  train_fileslist: /mnt/bn/maliva-gen-ai-v2/chunyu.li/fileslist/data_v10_core.txt
+  train_output_dir: debug/unet/stage2
+  train_fileslist: my_data/fileslist.txt
   train_data_dir: ""
-  audio_embeds_cache_dir: /mnt/bn/maliva-gen-ai-v2/chunyu.li/audio_cache/embeds
-  audio_mel_cache_dir: /mnt/bn/maliva-gen-ai-v2/chunyu.li/audio_cache/mel
+  audio_embeds_cache_dir: my_data/cache/embeds
+  audio_mel_cache_dir: my_data/cache/mel
 
   val_video_path: assets/demo1_video.mp4
   val_audio_path: assets/demo1_audio.wav
@@ -18,8 +18,15 @@ data:
   audio_feat_length: [2, 2]
 
 ckpt:
-  resume_ckpt_path: checkpoints/latentsync_unet.pt
-  save_ckpt_steps: 10000
+  # "auto": resume this stage's own newest checkpoint under train_output_dir if there is one,
+  # otherwise start from the newest checkpoint under resume_search_dir (the previous stage).
+  # Set an explicit path to pin a specific checkpoint.
+  resume_ckpt_path: auto
+  resume_search_dir: debug/unet/stage1
+  save_ckpt_steps: 5000
+  # Keep only the newest N checkpoints. Each is ~5 GB of weights plus a ~2.5 GB
+  # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
+  max_keep_ckpts: 10
 
 run:
   pixel_space_supervise: true
@@ -47,6 +54,9 @@ optimizer:
   max_grad_norm: 1.0
   lr_scheduler: constant
   lr_warmup_steps: 0
+  # Quantise AdamW's two moments to 8 bits block-wise. Saves ~7 GiB on the full-parameter
+  # stage1 and ~4 GiB on stage2. Requires bitsandbytes.
+  use_8bit_adam: true
 
 model:
   act_fn: silu
