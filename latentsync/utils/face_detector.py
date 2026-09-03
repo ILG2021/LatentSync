@@ -108,6 +108,13 @@ class FaceDetector:
             self.detector = OpenCvYuNet(
                 yunet_model_path, max_input_size=detection_size
             )
+        # Keep an OpenCV YuNet instance for the first frame so initialization
+        # uses the same CPU detector + MediaPipe combination as the stable path.
+        self.initialization_detector = (
+            self.detector
+            if self.backend == "cpu"
+            else OpenCvYuNet(yunet_model_path, max_input_size=detection_size)
+        )
         self.previous_bbox = None
         self.previous_landmarks = None
         self.frame_index = 0
@@ -160,9 +167,9 @@ class FaceDetector:
             min_detection_confidence=0.2,
         )
 
-    def _detect_landmarks_in_crop(self, frame, detection):
+    def _detect_landmarks_in_crop(self, frame, detection, force_mediapipe=False):
         f_h, f_w, _ = frame.shape
-        if self.ort_landmark is not None:
+        if self.ort_landmark is not None and not force_mediapipe:
             return self.ort_landmark.process(frame, detection)
 
         self._ensure_mediapipe()
@@ -186,6 +193,10 @@ class FaceDetector:
 
         result = self.crop_mesh.process(crop_for_mesh)
         if not result.multi_face_landmarks:
+            # Preserve the GPU fallback if MediaPipe cannot initialize the
+            # landmark track for an unusual first-frame pose.
+            if force_mediapipe and self.ort_landmark is not None:
+                return self.ort_landmark.process(frame, detection)
             return None
         candidate = result.multi_face_landmarks[0]
         return np.array(
@@ -243,7 +254,11 @@ class FaceDetector:
         return (x1, y1, x2, y2), np.round(landmarks).astype(np.int32)
 
     def _run_yunet(self, frame, frame_width, frame_height, score_threshold=None):
-        _, detections = self.detector.detect(frame, score_threshold=score_threshold)
+        initialize_track = self.previous_landmarks is None and self.ort_landmark is not None
+        detector = self.initialization_detector if initialize_track else self.detector
+        if initialize_track:
+            print("Initializing face track on CPU: YuNet=opencv, landmarks=mediapipe.")
+        _, detections = detector.detect(frame, score_threshold=score_threshold)
         if detections is None:
             return None
 
@@ -268,9 +283,15 @@ class FaceDetector:
         else:
             detections.sort(key=lambda item: item[2] * item[3], reverse=True)
 
+        # Establish a reliable track with the original MediaPipe path. Once
+        # landmarks exist, all later frames use the CUDA ONNX landmark model.
         for detection in detections:
             accepted = self._accept_landmarks(
-                self._detect_landmarks_in_crop(frame, detection), frame_width, frame_height
+                self._detect_landmarks_in_crop(
+                    frame, detection, force_mediapipe=initialize_track
+                ),
+                frame_width,
+                frame_height,
             )
             if accepted is not None:
                 return accepted
