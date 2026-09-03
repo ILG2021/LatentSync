@@ -14,6 +14,7 @@ Invoke-WebRequest `
     -Uri "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2026may.onnx" `
     -OutFile "checkpoints/auxiliary/face_detection_yunet_2026may.onnx"
 
-# Download the Apache-2.0 MediaPipe Face Landmarker v2 ONNX conversion (478 points).
-huggingface-cli download FreeHugsForRobots/ps-face-landmarks face_landmarks_detector.onnx `
-    --local-dir checkpoints/auxiliary
+# Download yakhyo's Apache-2.0 MediaPipe Face Landmarker v2 ONNX port (478 points).
+Invoke-WebRequest `
+    -Uri "https://github.com/yakhyo/mediapipe-face-mesh-onnx/releases/download/weights/face_landmarker_Nx3x256x256.onnx" `
+    -OutFile "checkpoints/auxiliary/face_landmarker_Nx3x256x256.onnx"

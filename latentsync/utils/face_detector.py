@@ -20,10 +20,10 @@ YUNET_MODEL_URL = (
 )
 YUNET_MODEL_SHA256 = "ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0"
 LANDMARK_MODEL_URL = (
-    "https://huggingface.co/FreeHugsForRobots/ps-face-landmarks/resolve/main/"
-    "face_landmarks_detector.onnx"
+    "https://github.com/yakhyo/mediapipe-face-mesh-onnx/releases/download/weights/"
+    "face_landmarker_Nx3x256x256.onnx"
 )
-LANDMARK_MODEL_SHA256 = "9c8dbae0cffd7b8e195b7c5e3795bd2a0f206a06b27edf30b2dd6900175c652a"
+LANDMARK_MODEL_SHA256 = "111795f8703cdeb6d0c68a9f3cc966a0f23f8786bb00f4577a11f461fc4276ac"
 
 
 def _ensure_model(model_path: Path, model_url: str, expected_sha256: str) -> Path:
@@ -108,20 +108,18 @@ class FaceDetector:
             self.detector = OpenCvYuNet(
                 yunet_model_path, max_input_size=detection_size
             )
-        # Keep an OpenCV YuNet instance for the first frame so initialization
-        # uses the same CPU detector + MediaPipe combination as the stable path.
-        self.initialization_detector = (
-            self.detector
-            if self.backend == "cpu"
-            else OpenCvYuNet(yunet_model_path, max_input_size=detection_size)
-        )
         self.previous_bbox = None
         self.previous_landmarks = None
         self.frame_index = 0
         self.mesh = None
         self.crop_mesh = None
         self.ort_landmark = None
-        landmark_model_path = project_root / "checkpoints" / "auxiliary" / "face_landmarks_detector.onnx"
+        landmark_model_path = (
+            project_root
+            / "checkpoints"
+            / "auxiliary"
+            / "face_landmarker_Nx3x256x256.onnx"
+        )
         if device_id is not None:
             try:
                 landmark_model_path = _ensure_model(
@@ -167,9 +165,9 @@ class FaceDetector:
             min_detection_confidence=0.2,
         )
 
-    def _detect_landmarks_in_crop(self, frame, detection, force_mediapipe=False):
+    def _detect_landmarks_in_crop(self, frame, detection):
         f_h, f_w, _ = frame.shape
-        if self.ort_landmark is not None and not force_mediapipe:
+        if self.ort_landmark is not None:
             return self.ort_landmark.process(frame, detection)
 
         self._ensure_mediapipe()
@@ -193,10 +191,6 @@ class FaceDetector:
 
         result = self.crop_mesh.process(crop_for_mesh)
         if not result.multi_face_landmarks:
-            # Preserve the GPU fallback if MediaPipe cannot initialize the
-            # landmark track for an unusual first-frame pose.
-            if force_mediapipe and self.ort_landmark is not None:
-                return self.ort_landmark.process(frame, detection)
             return None
         candidate = result.multi_face_landmarks[0]
         return np.array(
@@ -254,11 +248,7 @@ class FaceDetector:
         return (x1, y1, x2, y2), np.round(landmarks).astype(np.int32)
 
     def _run_yunet(self, frame, frame_width, frame_height, score_threshold=None):
-        initialize_track = self.previous_landmarks is None and self.ort_landmark is not None
-        detector = self.initialization_detector if initialize_track else self.detector
-        if initialize_track:
-            print("Initializing face track on CPU: YuNet=opencv, landmarks=mediapipe.")
-        _, detections = detector.detect(frame, score_threshold=score_threshold)
+        _, detections = self.detector.detect(frame, score_threshold=score_threshold)
         if detections is None:
             return None
 
@@ -283,13 +273,9 @@ class FaceDetector:
         else:
             detections.sort(key=lambda item: item[2] * item[3], reverse=True)
 
-        # Establish a reliable track with the original MediaPipe path. Once
-        # landmarks exist, all later frames use the CUDA ONNX landmark model.
         for detection in detections:
             accepted = self._accept_landmarks(
-                self._detect_landmarks_in_crop(
-                    frame, detection, force_mediapipe=initialize_track
-                ),
+                self._detect_landmarks_in_crop(frame, detection),
                 frame_width,
                 frame_height,
             )

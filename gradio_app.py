@@ -1,3 +1,7 @@
+import os
+
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+
 import gradio as gr
 from pathlib import Path
 from scripts.inference import main
@@ -91,7 +95,7 @@ def create_args(
 
 
 # Create Gradio interface
-with gr.Blocks(title="LatentSync demo") as demo:
+with gr.Blocks(title="LatentSync demo", analytics_enabled=False) as demo:
     gr.Markdown(
         """
     <h1 align="center">LatentSync</h1>
@@ -152,4 +156,4 @@ with gr.Blocks(title="LatentSync demo") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(inbrowser=True, share=True)
+    demo.launch(inbrowser=True, share=False)

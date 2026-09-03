@@ -208,86 +208,72 @@ class OrtYuNet(_ScaledYuNet):
 
 
 class OrtFaceLandmark:
-    """The 478-point MediaPipe Face Landmarker model running through ORT CUDA."""
+    """MediaPipe Face Landmarker v2 using yakhyo's parity-tested ONNX pipeline.
+
+    The ROI geometry and model preprocessing are adapted from
+    https://github.com/yakhyo/mediapipe-face-mesh-onnx (Apache-2.0).
+    Unlike that project's public BGR API, this wrapper accepts the RGB frames
+    used throughout LatentSync.
+    """
 
     def __init__(self, model_path: Path, device_id: int):
         self.session = create_ort_session(model_path, device_id)
         self.input = self.session.get_inputs()[0]
         outputs = self.session.get_outputs()
-        input_dims = [dimension for dimension in self.input.shape if isinstance(dimension, int)]
-        if len(input_dims) < 3:
+        if (
+            len(self.input.shape) != 4
+            or self.input.shape[1] != 3
+            or not isinstance(self.input.shape[2], int)
+            or self.input.shape[2] != self.input.shape[3]
+        ):
             raise RuntimeError(f"Unexpected landmark input shape: {self.input.shape}")
-        self.input_size = max(input_dims[-3:])
-        self.nchw = len(self.input.shape) == 4 and self.input.shape[1] == 3
-
-        landmark_outputs = [
-            output
-            for output in outputs
-            if 1434 in [dimension for dimension in output.shape if isinstance(dimension, int)]
-        ]
-        if len(landmark_outputs) != 1:
+        self.input_size = int(self.input.shape[2])
+        if len(outputs) != 2 or outputs[0].shape[-2:] != [478, 3]:
             raise RuntimeError(
-                "Expected one 478x3 landmark output, got "
+                "Expected yakhyo's 478x3 landmarks and presence logit outputs, got "
                 f"{[(output.name, output.shape) for output in outputs]}"
             )
-        self.landmark_output = landmark_outputs[0].name
-        # The pinned MediaPipe v2 conversion retains this output name. Selecting it
-        # explicitly avoids confusing it with the model's second scalar output.
-        presence_outputs = [output for output in outputs if output.name == "Identity_1"]
-        if len(presence_outputs) != 1:
-            raise RuntimeError(
-                "Expected MediaPipe face-presence output 'Identity_1', got "
-                f"{[output.name for output in outputs]}"
-            )
-        self.presence_output = presence_outputs[0].name
 
     def process(self, rgb_frame, detection):
-        """Run the landmark model on a MediaPipe-style oriented face ROI.
-
-        YuNet's first two keypoints are the eyes.  Rotating the ROI to make that
-        line horizontal is important: the standalone landmark model normally
-        receives this transform from the MediaPipe graph.
-        """
+        """Run one RGB frame through MediaPipe's static-image ROI recipe."""
         x, y, width, height = detection[:4]
         eye_0 = np.asarray(detection[4:6], dtype=np.float32)
         eye_1 = np.asarray(detection[6:8], dtype=np.float32)
         angle = np.degrees(np.arctan2(eye_1[1] - eye_0[1], eye_1[0] - eye_0[0]))
-        roi_size = max(max(float(width), float(height)) * 1.5, 1.0)
-        center = np.array([x + width / 2, y + height / 2], dtype=np.float32)
+        side = max(max(float(width), float(height)) * 1.5, 1.0)
+        center_x = float(x + width / 2)
+        center_y = float(y + height / 2)
 
-        matrix = cv2.getRotationMatrix2D(tuple(center), float(angle), self.input_size / roi_size)
-        mapped_center = matrix[:, :2] @ center + matrix[:, 2]
-        matrix[:, 2] += self.input_size / 2 - mapped_center
-        resized = cv2.warpAffine(
+        # Sample the rotated ROI directly at model resolution. MediaPipe uses
+        # zero padding outside the frame; a materialized crop or replicated
+        # border changes pixels near image edges.
+        matrix = cv2.getRotationMatrix2D(
+            (center_x, center_y), float(angle), self.input_size / side
+        )
+        matrix[0, 2] += self.input_size / 2.0 - center_x
+        matrix[1, 2] += self.input_size / 2.0 - center_y
+        crop = cv2.warpAffine(
             rgb_frame,
             matrix,
             (self.input_size, self.input_size),
             flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
-        # Face Landmarker v2 uses approximately [-1, 1] RGB input.
-        tensor = (resized.astype(np.float32) - 127.0) / 128.0
-        if self.nchw:
-            tensor = np.transpose(tensor, (2, 0, 1))
-        tensor = tensor[None]
-        raw, presence_logit = self.session.run(
-            [self.landmark_output, self.presence_output], {self.input.name: tensor}
-        )
-        presence_value = float(np.asarray(presence_logit).reshape(-1)[0])
-        presence = (
-            presence_value
-            if 0.0 <= presence_value <= 1.0
-            else 1.0 / (1.0 + np.exp(-np.clip(presence_value, -30.0, 30.0)))
+        tensor = np.transpose(crop.astype(np.float32) / 255.0, (2, 0, 1))[None]
+        raw, presence_logit = self.session.run(None, {self.input.name: tensor})
+        presence_logit = np.asarray(presence_logit).reshape(-1)[0]
+        presence = float(
+            1.0 / (1.0 + np.exp(-np.clip(presence_logit, -30.0, 30.0)))
         )
         if presence < 0.5:
             return None
-        landmarks = raw.reshape(-1, 3)
-        if len(landmarks) != 478:
-            raise RuntimeError(f"Face landmark model returned {len(landmarks)} points, expected 478")
-        landmarks = landmarks[:, :2].astype(np.float32)
-        # Some exports expose normalized coordinates while the official graph exposes
-        # coordinates in input pixels. Support both without changing the public output.
-        if np.nanpercentile(np.abs(landmarks), 99) <= 2.0:
-            landmarks *= self.input_size
+
+        landmarks = np.asarray(raw[0], dtype=np.float64)
+        if landmarks.shape != (478, 3):
+            raise RuntimeError(
+                f"Face landmark model returned {landmarks.shape}, expected (478, 3)"
+            )
         inverse = cv2.invertAffineTransform(matrix)
-        return cv2.transform(landmarks[None], inverse)[0]
+        landmarks[:, :2] = landmarks[:, :2] @ inverse[:, :2].T + inverse[:, 2]
+        return landmarks[:, :2].astype(np.float32)
