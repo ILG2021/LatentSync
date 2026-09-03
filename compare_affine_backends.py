@@ -355,7 +355,14 @@ def write_visualizations(output_dir, visualizations):
     visual_dir.mkdir(parents=True, exist_ok=True)
     for rank, (crop_mae, source_frame, contact_sheet) in enumerate(visualizations, start=1):
         filename = visual_dir / f"{rank:02d}_frame_{source_frame:06d}_mae_{crop_mae:.2f}.jpg"
-        cv2.imwrite(str(filename), cv2.cvtColor(contact_sheet, cv2.COLOR_RGB2BGR))
+        bgr = cv2.cvtColor(contact_sheet, cv2.COLOR_RGB2BGR)
+        encoded_ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not encoded_ok:
+            raise RuntimeError(f"OpenCV could not encode visualization: {filename}")
+        # cv2.imwrite silently fails for some non-ASCII paths on Windows. Let
+        # pathlib perform the filesystem write so Chinese video names work.
+        filename.write_bytes(encoded.tobytes())
+    return len(visualizations)
 
 
 def write_report(output_dir, rows, summary):
@@ -442,8 +449,9 @@ def run_comparison(video_path, output_dir, args):
     summary["current_repaired_frames"] = current_repaired
     failures = threshold_failures(summary, args)
     summary["threshold_failures"] = failures
+    visualizations_written = write_visualizations(output_dir, visualizations)
+    summary["visualizations_written"] = visualizations_written
     write_report(output_dir, rows, summary)
-    write_visualizations(output_dir, visualizations)
 
     anchor = summary["metrics"]["anchor_nrmse"]
     crop = summary["metrics"]["crop_mae"]
@@ -451,6 +459,7 @@ def run_comparison(video_path, output_dir, args):
     print(f"anchor NRMSE: mean={anchor['mean']:.4f}, p95={anchor['p95']:.4f}, max={anchor['max']:.4f}")
     print(f"crop corner normalized error: mean={corners['mean']:.4f}, p95={corners['p95']:.4f}")
     print(f"crop RGB MAE: mean={crop['mean']:.2f}, p95={crop['p95']:.2f}, max={crop['max']:.2f}")
+    print(f"Worst-frame visualizations written: {visualizations_written}")
     print(f"Report written to {output_dir.resolve()}")
     return summary
 
