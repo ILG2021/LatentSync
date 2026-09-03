@@ -171,6 +171,9 @@ changing the inference environment:
 python compare_affine_backends.py --video path/to/input.mp4 --device cuda --anchor-scale 0.94
 ```
 
+The regular and batch inference commands also accept `--anchor-scale`; the environment variable
+remains available as the default when the command-line option is omitted.
+
 To compare every supported video directly inside a directory:
 
 ```bash
