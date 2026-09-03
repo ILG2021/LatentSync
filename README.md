@@ -147,16 +147,9 @@ the CPU-only `onnxruntime` package so that `CUDAExecutionProvider` is available.
 
 By default, the MediaPipe triangle is contracted to `0.935` of its original size around its
 centroid. This keeps the anchor centre unchanged and makes the aligned face about 7% larger,
-matching the scale of the LatentSync training crops more closely. On Windows PowerShell, override
-the value with:
-
-```powershell
-$env:LATENTSYNC_FACE_ANCHOR_SCALE = "0.96"
-```
-
-Use `1.0` to disable the contraction. The regular and batch inference commands also accept
-`--anchor-scale`; the environment variable remains available as the default when the command-line
-option is omitted.
+matching the scale of the LatentSync training crops more closely. The calibrated value is fixed
+for preprocessing, Gradio, regular inference, and batch inference so every entry point uses the
+same crop geometry.
 
 ## 🚀 Inference
 

@@ -37,14 +37,6 @@ def main():
     parser.add_argument("--seed", type=int, default=1247)
     parser.add_argument("--temp_dir", default="temp")
     parser.add_argument("--enable_deepcache", action="store_true")
-    parser.add_argument(
-        "--anchor-scale",
-        "--anchor_scale",
-        dest="anchor_scale",
-        type=float,
-        default=None,
-        help="Contract the three face-alignment anchors about their centroid (default: 0.935)",
-    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -72,8 +64,6 @@ def main():
                    "--video_out_path", str(output_path), "--metrics_json", str(metrics_path)]
         if args.enable_deepcache:
             command.append("--enable_deepcache")
-        if args.anchor_scale is not None:
-            command.extend(["--anchor-scale", str(args.anchor_scale)])
         print(f"[{len(rows) + 1}/{len(pairs)}] {stem}")
         result = subprocess.run(command, text=True)
         if result.returncode != 0:
@@ -93,7 +83,6 @@ def main():
         "audio_duration_seconds",
         "elapsed_seconds",
         "peak_vram_mb",
-        "face_anchor_scale",
         "video_out_path",
         "error_code",
     ]
