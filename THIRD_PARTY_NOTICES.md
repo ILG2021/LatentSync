@@ -14,14 +14,13 @@ Copyright notices and the full license text are available in the upstream model 
 
 ## MediaPipe Face Landmarker v2 (478 points)
 
-- File: `face_landmarker_Nx3x256x256.onnx`
-- ONNX/PyTorch port and preprocessing implementation:
-  https://github.com/yakhyo/mediapipe-face-mesh-onnx
+- File: `face_landmarks_detector.onnx`
+- ONNX conversion: https://huggingface.co/FreeHugsForRobots/ps-face-landmarks
 - Original model project: https://github.com/google-ai-edge/mediapipe
-- License: Apache License 2.0
-- SHA-256: `111795f8703cdeb6d0c68a9f3cc966a0f23f8786bb00f4577a11f461fc4276ac`
+- License declared by the model distributor: Apache License 2.0
+- SHA-256: `9c8dbae0cffd7b8e195b7c5e3795bd2a0f206a06b27edf30b2dd6900175c652a`
 
-The model architecture, ROI transform, preprocessing, and coordinate mapping are adapted from
-Yakhyokhuja Valikhujaev's Apache-2.0 implementation. Its weights originate from Google's MediaPipe
-Face Landmarker model. Keep this notice and the Apache License 2.0 text with commercial
-distributions that include the model or adapted implementation.
+The ONNX distributor identifies the file as a format conversion of Google's MediaPipe Face Mesh /
+Face Landmarker model with no model modifications. MediaPipe's repository and Face Mesh V2 model
+card carry the Apache License 2.0. Keep this notice and the Apache License 2.0 text with commercial
+distributions that include the model.

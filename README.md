@@ -105,13 +105,11 @@ Or you can download `latentsync_unet.pt` and `tiny.pt` manually from our [Huggin
 ### GPU face preprocessing
 
 The standard `opencv-python` and `mediapipe` wheels run YuNet and FaceMesh on the CPU. With a
-CUDA device, LatentSync now uses ONNX Runtime CUDA automatically for both the MIT-licensed,
-dynamic-input YuNet 2026may detector and the Apache-2.0 MediaPipe Face Landmarker v2 model
-(478 points), using the parity-tested ONNX port and ROI transform from
-[`yakhyo/mediapipe-face-mesh-onnx`](https://github.com/yakhyo/mediapipe-face-mesh-onnx).
-The pinned models are downloaded by the setup script or automatically on first use, and their
-SHA-256 hashes are checked. CUDA is used from the first frame; there is no CPU-only initialization
-step.
+CUDA device, LatentSync uses ONNX Runtime CUDA for the steady-state MIT-licensed, dynamic-input
+YuNet 2026may detector and Apache-2.0 MediaPipe Face Landmarker v2 model (478 points). Track
+initialization deliberately uses OpenCV YuNet and MediaPipe on the CPU for the first frame; later
+frames use the CUDA path. The pinned models are downloaded by the setup script or automatically
+on first use, and their SHA-256 hashes are checked.
 
 OpenCV describes 2026may as a dynamic-shape re-export of 2023mar, not a newly trained detector;
 the benefit here is reliable variable-resolution ONNX Runtime input rather than changed accuracy.
