@@ -431,7 +431,16 @@ class LipsyncPipeline(DiffusionPipeline):
         whisper_chunks = self.audio_encoder.feature2chunks(feature_array=whisper_feature, fps=video_fps)
 
         audio_samples = read_audio(audio_path)
-        video_path_25fps = read_video(video_path, use_decord=False, load_frames=False)
+        # Only transcode the part of the source video that can be used by the
+        # supplied audio.  Without this limit, a short audio clip paired with a
+        # long (especially 4K) video needlessly transcodes the entire video
+        # before inference starts and makes the Gradio app appear to hang.
+        video_path_25fps = read_video(
+            video_path,
+            use_decord=False,
+            load_frames=False,
+            max_frames=len(whisper_chunks),
+        )
         vr_temp = decord.VideoReader(video_path_25fps)
         num_frames_total = len(vr_temp)
         del vr_temp

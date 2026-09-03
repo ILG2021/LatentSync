@@ -15,7 +15,7 @@
 import os
 import numpy as np
 import json
-from typing import Union
+from typing import Optional, Union
 from pathlib import Path
 import matplotlib.pyplot as plt
 import imageio
@@ -43,16 +43,36 @@ def read_json(filepath: str):
     return json_dict
 
 
-def read_video(video_path: str, change_fps=True, use_decord=True, load_frames=True):
+def read_video(
+    video_path: str,
+    change_fps=True,
+    use_decord=True,
+    load_frames=True,
+    max_frames: Optional[int] = None,
+):
     if change_fps:
         temp_dir = "temp"
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)
-        command = (
-            f'ffmpeg -loglevel error -y -nostdin -i "{video_path}" -r 25 -b:v 15M "{os.path.join(temp_dir, "video.mp4")}"'
-        )
-        subprocess.run(command, shell=True)
+        command = [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-nostdin",
+            "-i",
+            video_path,
+            "-an",
+            "-r",
+            "25",
+        ]
+        if max_frames is not None:
+            if max_frames < 1:
+                raise ValueError("max_frames must be at least 1")
+            command.extend(["-frames:v", str(max_frames)])
+        command.extend(["-b:v", "15M", os.path.join(temp_dir, "video.mp4")])
+        subprocess.run(command, check=True)
         target_video_path = os.path.join(temp_dir, "video.mp4")
     else:
         target_video_path = video_path
