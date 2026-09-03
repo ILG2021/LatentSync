@@ -223,6 +223,42 @@ def source_crop_corners(matrix, face_size):
     return cv2.transform(crop_corners, cv2.invertAffineTransform(matrix))[0]
 
 
+def affine_scale(matrix):
+    """Return the isotropic source-to-crop scale encoded by a 2x3 matrix."""
+    return float(np.hypot(matrix[0, 0], matrix[1, 0]))
+
+
+def draw_anchor_sets(panel, old_anchors, new_anchors, matrix, face_size):
+    """Draw both source anchor triangles in one aligned-crop coordinate system."""
+    output_h, output_w = panel.shape[:2]
+    scale_to_panel = np.asarray(
+        [output_w / face_size[0], output_h / face_size[1]], dtype=np.float32
+    )
+    names = ("L", "R", "N")
+    sets = (
+        (old_anchors, (0, 255, 0)),      # RGB green: legacy InsightFace
+        (new_anchors, (255, 0, 255)),    # RGB magenta: current MediaPipe
+    )
+    for anchors, color in sets:
+        mapped = cv2.transform(np.asarray([anchors], dtype=np.float32), matrix)[0]
+        points = np.rint(mapped * scale_to_panel).astype(np.int32)
+        cv2.polylines(panel, [points], True, color, 3, cv2.LINE_AA)
+        for name, point in zip(names, points):
+            x = int(np.clip(point[0], 0, output_w - 1))
+            y = int(np.clip(point[1], 0, output_h - 1))
+            cv2.circle(panel, (x, y), 7, color, -1, cv2.LINE_AA)
+            cv2.putText(
+                panel,
+                name,
+                (min(x + 9, output_w - 18), max(y - 9, 16)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+
+
 def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmarks, args):
     legacy_aligner = AlignRestore(resolution=args.resolution, device=args.device)
     current_aligner = AlignRestore(resolution=args.resolution, device=args.device)
@@ -269,6 +305,7 @@ def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmar
         old_corners = source_crop_corners(old_matrix, legacy_aligner.face_size)
         new_corners = source_crop_corners(new_matrix, current_aligner.face_size)
         corner_error = float(np.mean(np.linalg.norm(new_corners - old_corners, axis=1)))
+        scale_ratio = affine_scale(new_matrix) / max(affine_scale(old_matrix), 1e-12)
 
         row = {
             "sample_index": position,
@@ -280,6 +317,7 @@ def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmar
             "anchor_nrmse": anchor_rmse / baseline_scale,
             "crop_corner_error_px": corner_error,
             "crop_corner_nerror": corner_error / baseline_scale,
+            "affine_scale_ratio": scale_ratio,
             "crop_mae": crop_mae,
             "crop_psnr_db": crop_psnr,
         }
@@ -287,13 +325,34 @@ def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmar
 
         if args.visualizations > 0:
             source = cv2.resize(frame, old_crop.shape[1::-1], interpolation=cv2.INTER_AREA)
+            old_crop_overlay = old_crop.copy()
+            new_crop_overlay = new_crop.copy()
+            draw_anchor_sets(
+                old_crop_overlay,
+                old_anchors,
+                new_anchors,
+                old_matrix,
+                legacy_aligner.face_size,
+            )
+            draw_anchor_sets(
+                new_crop_overlay,
+                old_anchors,
+                new_anchors,
+                new_matrix,
+                current_aligner.face_size,
+            )
             difference = cv2.absdiff(old_crop, new_crop)
             difference = cv2.applyColorMap(
                 cv2.cvtColor(difference, cv2.COLOR_RGB2GRAY), cv2.COLORMAP_TURBO
             )
             difference = cv2.cvtColor(difference, cv2.COLOR_BGR2RGB)
-            panels = [source, old_crop.copy(), new_crop.copy(), difference]
-            labels = ["source", "legacy InsightFace", "current", "absolute difference"]
+            panels = [source, old_crop_overlay, new_crop_overlay, difference]
+            labels = [
+                f"source | scale(new/old)={scale_ratio:.4f}",
+                "legacy | green=old magenta=new",
+                "current | green=old magenta=new",
+                "absolute difference",
+            ]
             for panel, label in zip(panels, labels):
                 cv2.putText(
                     panel, label, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
@@ -322,6 +381,7 @@ def summarize(rows, legacy_missing, current_missing, args, video_path):
         "anchor_nrmse",
         "crop_corner_error_px",
         "crop_corner_nerror",
+        "affine_scale_ratio",
         "crop_mae",
         "crop_psnr_db",
     ]
@@ -343,6 +403,8 @@ def summarize(rows, legacy_missing, current_missing, args, video_path):
         values = [row[metric] for row in rows if math.isfinite(row[metric])]
         summary["metrics"][metric] = {
             "mean": float(np.mean(values)),
+            "min": float(np.min(values)),
+            "p05": percentile(values, 5),
             "p50": percentile(values, 50),
             "p95": percentile(values, 95),
             "max": float(np.max(values)),
@@ -456,8 +518,13 @@ def run_comparison(video_path, output_dir, args):
     anchor = summary["metrics"]["anchor_nrmse"]
     crop = summary["metrics"]["crop_mae"]
     corners = summary["metrics"]["crop_corner_nerror"]
+    scale = summary["metrics"]["affine_scale_ratio"]
     print(f"anchor NRMSE: mean={anchor['mean']:.4f}, p95={anchor['p95']:.4f}, max={anchor['max']:.4f}")
     print(f"crop corner normalized error: mean={corners['mean']:.4f}, p95={corners['p95']:.4f}")
+    print(
+        f"current/legacy affine scale: mean={scale['mean']:.4f}, "
+        f"median={scale['p50']:.4f}, p95={scale['p95']:.4f}"
+    )
     print(f"crop RGB MAE: mean={crop['mean']:.2f}, p95={crop['p95']:.2f}, max={crop['max']:.2f}")
     print(f"Worst-frame visualizations written: {visualizations_written}")
     print(f"Report written to {output_dir.resolve()}")
@@ -486,11 +553,17 @@ def write_batch_report(output_dir, results):
             "current_missing": result.get("current_missing_before_interpolation", ""),
             "anchor_nrmse_p95": "",
             "crop_corner_nerror_p95": "",
+            "affine_scale_ratio_p05": "",
+            "affine_scale_ratio_p50": "",
+            "affine_scale_ratio_p95": "",
             "crop_mae_p95": "",
         }
         if "metrics" in result:
             row["anchor_nrmse_p95"] = result["metrics"]["anchor_nrmse"]["p95"]
             row["crop_corner_nerror_p95"] = result["metrics"]["crop_corner_nerror"]["p95"]
+            row["affine_scale_ratio_p05"] = result["metrics"]["affine_scale_ratio"]["p05"]
+            row["affine_scale_ratio_p50"] = result["metrics"]["affine_scale_ratio"]["p50"]
+            row["affine_scale_ratio_p95"] = result["metrics"]["affine_scale_ratio"]["p95"]
             row["crop_mae_p95"] = result["metrics"]["crop_mae"]["p95"]
         rows.append(row)
     with (output_dir / "per_video.csv").open("w", newline="", encoding="utf-8") as handle:

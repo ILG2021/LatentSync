@@ -151,6 +151,11 @@ and side-by-side images for the frames with the largest crop differences. Both l
 are rendered by the same current `AlignRestore` implementation so the report isolates the
 landmark and crop-geometry change:
 
+The legacy and current three-point anchor triangles are drawn over both aligned crops: green is
+legacy InsightFace and magenta is current MediaPipe (`L`, `R`, and `N` mark the two brow anchors
+and nose). The image title and CSV also report the current/legacy affine scale ratio; a value below
+1 means the current crop renders the face smaller.
+
 ```bash
 python compare_affine_backends.py --video path/to/input.mp4 --device cuda
 ```
