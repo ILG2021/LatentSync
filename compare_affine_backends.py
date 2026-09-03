@@ -350,7 +350,7 @@ def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmar
             difference = cv2.cvtColor(difference, cv2.COLOR_BGR2RGB)
             panels = [source, old_crop_overlay, new_crop_overlay, difference]
             labels = [
-                f"source | scale(new/old)={scale_ratio:.4f}",
+                f"source | anchor={args.anchor_scale:.3f} affine(new/old)={scale_ratio:.4f}",
                 "legacy | green=old magenta=new",
                 "current | green=old magenta=new",
                 "absolute difference",
@@ -495,7 +495,10 @@ def run_comparison(video_path, output_dir, args):
         "Legacy InsightFace", legacy_landmarks, args.max_interpolation_gap
     )
 
-    print(f"Running current preprocessing with YuNet interval {args.detection_interval}...")
+    print(
+        f"Running current preprocessing with YuNet interval {args.detection_interval}, "
+        f"anchor scale {args.anchor_scale:g}..."
+    )
     current_indices, current_landmarks = detect_current(
         video_path, args.stride, args.max_frames, args.device, args.detection_interval
     )

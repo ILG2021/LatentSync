@@ -21,6 +21,7 @@ import torch
 from diffusers import AutoencoderKL, DDIMScheduler
 from latentsync.models.unet import UNet3DConditionModel
 from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+from latentsync.utils.image_processor import resolve_face_anchor_scale
 from accelerate.utils import set_seed
 from latentsync.whisper.audio2feature import Audio2Feature
 from DeepCache import DeepCacheSDHelper
@@ -39,6 +40,8 @@ def main(config, args):
     print(f"Input video path: {args.video_path}")
     print(f"Input audio path: {args.audio_path}")
     print(f"Loaded checkpoint path: {args.inference_ckpt_path}")
+    face_anchor_scale = resolve_face_anchor_scale(args.anchor_scale)
+    print(f"Face anchor scale: {face_anchor_scale:g}")
 
     scheduler = DDIMScheduler.from_pretrained("configs")
 
@@ -102,6 +105,7 @@ def main(config, args):
         width=config.data.resolution,
         height=config.data.resolution,
         mask_image_path=config.data.mask_image_path,
+        face_anchor_scale=face_anchor_scale,
         temp_dir=args.temp_dir,
     )
     elapsed_seconds = time.perf_counter() - started_at
@@ -109,6 +113,7 @@ def main(config, args):
     metrics = {
         "elapsed_seconds": elapsed_seconds,
         "peak_vram_mb": peak_vram_bytes / (1024 ** 2),
+        "face_anchor_scale": face_anchor_scale,
         "video_out_path": os.path.abspath(args.video_out_path),
     }
     print("INFERENCE_METRICS=" + json.dumps(metrics, ensure_ascii=False))
@@ -130,6 +135,14 @@ if __name__ == "__main__":
     parser.add_argument("--temp_dir", type=str, default="temp")
     parser.add_argument("--seed", type=int, default=1247)
     parser.add_argument("--enable_deepcache", action="store_true")
+    parser.add_argument(
+        "--anchor-scale",
+        "--anchor_scale",
+        dest="anchor_scale",
+        type=float,
+        default=None,
+        help="Contract the three face-alignment anchors about their centroid (default: 0.94)",
+    )
     parser.add_argument("--metrics_json", type=str, default="")
     args = parser.parse_args()
 
