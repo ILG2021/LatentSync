@@ -154,6 +154,17 @@ matching the scale of the LatentSync training crops more closely. The calibrated
 for preprocessing, Gradio, regular inference, and batch inference so every entry point uses the
 same crop geometry.
 
+To compare this alignment against the original LatentSync InsightFace 106-point preprocessing on
+the same video, run:
+
+```bash
+python compare_affine_backends.py --video path/to/input.mp4 --device cuda
+```
+
+The regression tool writes per-frame CSV metrics, a JSON summary, and side-by-side visualizations
+of the frames with the largest crop differences. InsightFace and its pretrained weights are
+test-only dependencies and are intentionally not included in `requirements.txt`.
+
 ## 🚀 Inference
 
 Minimum VRAM for inference:
