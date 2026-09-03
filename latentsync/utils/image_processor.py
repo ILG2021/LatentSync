@@ -138,6 +138,12 @@ class ImageProcessor:
         if self.face_detector is not None:
             self.face_detector.reset_tracking()
 
+    def release_face_detector(self):
+        """Release face-detection models once affine preprocessing is complete."""
+        if self.face_detector is not None:
+            self.face_detector.close()
+            self.face_detector = None
+
     def affine_transform_with_landmarks(self, image: torch.Tensor, face_landmarks: np.ndarray) -> np.ndarray:
         # The UNet checkpoint was trained on crops built from InsightFace 106-point landmarks:
         #   left  = mean(lmk106[[43, 48, 49, 51, 50]])   # left eyebrow center

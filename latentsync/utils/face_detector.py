@@ -372,7 +372,18 @@ class FaceDetector:
     def close(self):
         if self.mesh is not None:
             self.mesh.close()
+            self.mesh = None
+        if self.crop_mesh is not None:
             self.crop_mesh.close()
+            self.crop_mesh = None
+
+        # ONNX Runtime and OpenCV do not expose a close method for these
+        # objects. Dropping the final references destroys their sessions/models
+        # and releases their CUDA/CPU allocations before diffusion starts.
+        self.ort_landmark = None
+        self.initialization_detector = None
+        self.detector = None
+        self.reset_tracking()
 
 
 def cuda_to_int(cuda_str: str) -> int:

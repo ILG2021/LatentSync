@@ -446,7 +446,14 @@ class LipsyncPipeline(DiffusionPipeline):
         del vr_temp
         video_frames = LoopedVideoFrames(video_path_25fps, list(range(num_frames_total)), video_path)
 
-        video_frames, faces, boxes, affine_matrices = self.loop_video(whisper_chunks, video_frames)
+        try:
+            video_frames, faces, boxes, affine_matrices = self.loop_video(whisper_chunks, video_frames)
+        finally:
+            # Face detection is finished at this point. Release MediaPipe and
+            # the YuNet/landmark ONNX sessions before allocating diffusion
+            # latents, while retaining the align/restore processor used below.
+            self.image_processor.release_face_detector()
+            gc.collect()
 
         synced_video_frames = []
 

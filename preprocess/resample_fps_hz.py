@@ -40,14 +40,16 @@ def resample_fps_hz(video_input, video_output, gop):
     # We always re-encode, even when the source is already 25 FPS / 16000 Hz. Stream copying would
     # keep the source GOP structure, and `segment_videos` can only cut on keyframes -- so without a
     # known keyframe interval the segments come out at arbitrary lengths.
-    # -g / -keyint_min force a keyframe every `gop` frames, -sc_threshold 0 stops x264 from adding
-    # extra keyframes on scene changes, which would make the segments uneven again.
+    # -g fixes the NVENC GOP length, while -no-scenecut prevents adaptive I-frames from making the
+    # stream-copy segments uneven. Encoding is offloaded to NVENC because resampling long 4K source
+    # videos with libx264 otherwise leaves the GPU idle and can take hours.
     # -map 0:v:0 -map 0:a:0? : Only take first video and first audio stream
     # -sn -dn -map_metadata -1 : Strip subtitles, data streams, and all metadata
     print(f"Resampling/Re-encoding {video_input} (keyframe every {gop} frames)...")
     command = (
         f'ffmpeg -loglevel info -y -i "{video_input_fixed}" -map 0:v:0 -map 0:a:0? -r 25 '
-        f"-c:v libx264 -preset fast -crf 18 -g {gop} -keyint_min {gop} -sc_threshold 0 "
+        f"-c:v h264_nvenc -preset p5 -tune hq -rc vbr -cq 18 -b:v 0 "
+        f"-g {gop} -no-scenecut 1 -forced-idr 1 "
         f'-c:a aac -ar 16000 -q:a 0 -sn -dn -map_metadata -1 -map_chapters -1 -ignore_unknown "{video_output_fixed}"'
     )
 
