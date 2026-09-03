@@ -106,6 +106,10 @@ class ImageProcessor:
         _, face_landmarks = self.face_detector(image)
         return face_landmarks
 
+    def reset_face_tracking(self):
+        if self.face_detector is not None:
+            self.face_detector.reset_tracking()
+
     def affine_transform_with_landmarks(self, image: torch.Tensor, face_landmarks: np.ndarray) -> np.ndarray:
         # The UNet checkpoint was trained on crops built from InsightFace 106-point landmarks:
         #   left  = mean(lmk106[[43, 48, 49, 51, 50]])   # left eyebrow center
@@ -172,6 +176,7 @@ class VideoProcessor:
 
         # Detect the whole track first, then repair it, then align: the same order the inference
         # pipeline uses. Aligning frame by frame would abort the clip on the first missed face.
+        self.image_processor.reset_face_tracking()
         landmarks = [self.image_processor.detect_face_landmarks(frame) for frame in video_frames]
         failed_index, repaired_count = interpolate_missing_landmarks(landmarks)
         if failed_index is not None:

@@ -284,6 +284,7 @@ class LipsyncPipeline(DiffusionPipeline):
         landmarks = []
         print(f"Detecting {len(video_frames)} faces...")
         video_name = Path(video_frames.source_video_path).stem
+        self.image_processor.reset_face_tracking()
         for frame in tqdm.tqdm(video_frames):
             landmarks.append(self.image_processor.detect_face_landmarks(frame))
 

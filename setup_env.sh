@@ -16,5 +16,9 @@ huggingface-cli download ByteDance/LatentSync-1.6 latentsync_unet.pt --local-dir
 # Download the MIT-licensed YuNet face detector from the official OpenCV Zoo.
 mkdir -p checkpoints/auxiliary
 curl -L \
-  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
-  -o checkpoints/auxiliary/face_detection_yunet_2023mar.onnx
+  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2026may.onnx \
+  -o checkpoints/auxiliary/face_detection_yunet_2026may.onnx
+
+# Download the Apache-2.0 MediaPipe Face Landmarker v2 ONNX conversion (478 points).
+huggingface-cli download FreeHugsForRobots/ps-face-landmarks face_landmarks_detector.onnx \
+  --local-dir checkpoints/auxiliary

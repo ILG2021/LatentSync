@@ -6,6 +6,9 @@ einops==0.7.0
 omegaconf==2.3.0
 opencv-python==4.9.0.80
 mediapipe==0.10.13
+# The stock OpenCV and MediaPipe wheels are CPU-only. Their ONNX models use this
+# provider for CUDA preprocessing inference (see latentsync/utils/face_detector.py).
+onnxruntime-gpu>=1.20.0
 librosa==0.10.1
 scenedetect==0.6.1
 ffmpeg-python==0.2.0

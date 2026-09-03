@@ -102,6 +102,73 @@ If the download is successful, the checkpoints should appear as follows:
 
 Or you can download `latentsync_unet.pt` and `tiny.pt` manually from our [HuggingFace repo](https://huggingface.co/ByteDance/LatentSync-1.6)
 
+### GPU face preprocessing
+
+The standard `opencv-python` and `mediapipe` wheels run YuNet and FaceMesh on the CPU. With a
+CUDA device, LatentSync now uses ONNX Runtime CUDA automatically for both the MIT-licensed,
+dynamic-input YuNet 2026may detector and the Apache-2.0 MediaPipe Face Landmarker v2 model
+(478 points). The pinned models are downloaded by the setup script or automatically on first use,
+and their SHA-256 hashes are checked.
+
+OpenCV describes 2026may as a dynamic-shape re-export of 2023mar, not a newly trained detector;
+the benefit here is reliable variable-resolution ONNX Runtime input rather than changed accuracy.
+
+For single-presenter input up to 4K, detection adapts to the source resolution and downsizes only
+when the longest edge exceeds 640 pixels. Detection boxes and landmarks are mapped back onto the
+original-resolution frame before LatentSync crops and aligns the face. Override the detection
+resolution only when smaller faces need more detail:
+
+```bash
+# Windows PowerShell
+$env:LATENTSYNC_FACE_DETECTION_SIZE = "960"
+
+# Linux/macOS
+export LATENTSYNC_FACE_DETECTION_SIZE=960
+```
+
+For single-presenter footage, YuNet runs on the first frame and then every 5 frames by default.
+The landmark model still runs on every frame and updates the face ROI, so lip and head motion are
+not sampled at the lower rate. If tracking loses confidence, YuNet runs again immediately. Change
+the periodic detection interval when needed:
+
+```bash
+# Windows PowerShell (1 restores detection on every frame)
+$env:LATENTSYNC_FACE_DETECTION_INTERVAL = "5"
+
+# Linux/macOS
+export LATENTSYNC_FACE_DETECTION_INTERVAL=5
+```
+
+At startup, an unavailable CUDA provider produces an explicit warning before falling back to the
+CPU MediaPipe implementation. If both `onnxruntime` and `onnxruntime-gpu` are installed, uninstall
+the CPU-only `onnxruntime` package so that `CUDAExecutionProvider` is available.
+
+### Affine alignment regression comparison
+
+`compare_affine_backends.py` compares the current YuNet/MediaPipe alignment against the former
+InsightFace 106-point path on the same sampled frames. It writes `summary.json`, `per_frame.csv`,
+and side-by-side images for the frames with the largest crop differences. Both landmark tracks
+are rendered by the same current `AlignRestore` implementation so the report isolates the
+landmark and crop-geometry change:
+
+```bash
+python compare_affine_backends.py --video path/to/input.mp4 --device cuda
+```
+
+To compare every supported video directly inside a directory:
+
+```bash
+python compare_affine_backends.py --input-dir path/to/videos --device cuda
+```
+
+Add `--recursive` to include nested directories. Each video gets its own output directory; the
+root output directory also contains `batch_summary.json` and `per_video.csv` for the full batch.
+
+InsightFace and its pretrained weights are temporary test-only dependencies and are deliberately
+not included in `requirements.txt`. Remove them after the comparison. Optional
+`--max-p95-anchor-nrmse` and `--max-p95-crop-mae` limits make the script exit non-zero when a
+measured regression exceeds a threshold.
+
 ## 🚀 Inference
 
 Minimum VRAM for inference:

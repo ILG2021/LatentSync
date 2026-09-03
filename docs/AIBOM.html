@@ -355,11 +355,11 @@ ol.duties b{color:var(--ink);font-weight:600}
     </div>
 
     <div class="row is-clear">
-      <div class="row-top"><span class="name">face_detection_yunet_2023mar.onnx</span><span class="chip clear">MIT</span></div>
+      <div class="row-top"><span class="name">face_detection_yunet_2026may.onnx</span><span class="chip clear">MIT</span></div>
       <dl class="fields">
         <dt>来源</dt><dd><a href="https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet">OpenCV Zoo</a>：“All files in this directory are licensed under MIT License”</dd>
-        <dt>字节数</dt><dd class="mono">232,589</dd>
-        <dt>SHA-256</dt><dd class="mono scroll">8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4</dd>
+        <dt>字节数</dt><dd class="mono">229,738</dd>
+        <dt>SHA-256</dt><dd class="mono scroll">ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0</dd>
       </dl>
     </div>
 
@@ -372,12 +372,12 @@ ol.duties b{color:var(--ink);font-weight:600}
     </div>
 
     <div class="row is-clear">
-      <div class="row-top"><span class="name plain">MediaPipe Face Mesh</span><span class="chip clear">Apache-2.0</span></div>
+      <div class="row-top"><span class="name plain">MediaPipe Face Landmarker v2（ONNX 转换）</span><span class="chip clear">Apache-2.0</span></div>
       <dl class="fields">
         <dt>来源</dt><dd>Google MediaPipe，框架与预训练模型同为 Apache-2.0</dd>
         <dt>调用点</dt><dd class="mono">latentsync/utils/face_detector.py</dd>
       </dl>
-      <div class="flag good">人脸链路为 YuNet + MediaPipe，<b>未使用 InsightFace</b>（其权重明确限非商业研究，是本赛道最常见的阻断项）。扫描 <span class="mono">insightface|buffalo|antelope|arcface|retinaface|scrfd</span> 零命中。</div>
+      <div class="flag good">生产人脸链路为 YuNet + MediaPipe，<b>不依赖 InsightFace</b>。<span class="mono">compare_affine_backends.py</span> 仅在用户主动运行回归对比时延迟导入 InsightFace；该测试依赖及权重不得随商业发行包分发。</div>
     </div>
   </section>
 
