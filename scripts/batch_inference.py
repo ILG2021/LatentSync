@@ -43,7 +43,7 @@ def main():
         dest="anchor_scale",
         type=float,
         default=None,
-        help="Contract the three face-alignment anchors about their centroid (default: 0.94)",
+        help="Contract the three face-alignment anchors about their centroid (default: 0.935)",
     )
     args = parser.parse_args()
 

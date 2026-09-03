@@ -141,7 +141,7 @@ if __name__ == "__main__":
         dest="anchor_scale",
         type=float,
         default=None,
-        help="Contract the three face-alignment anchors about their centroid (default: 0.94)",
+        help="Contract the three face-alignment anchors about their centroid (default: 0.935)",
     )
     parser.add_argument("--metrics_json", type=str, default="")
     args = parser.parse_args()

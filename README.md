@@ -143,50 +143,20 @@ At startup, an unavailable CUDA provider produces an explicit warning before fal
 CPU MediaPipe implementation. If both `onnxruntime` and `onnxruntime-gpu` are installed, uninstall
 the CPU-only `onnxruntime` package so that `CUDAExecutionProvider` is available.
 
-### Affine alignment regression comparison
+### Face alignment scale
 
-`compare_affine_backends.py` compares the current YuNet/MediaPipe alignment against the former
-InsightFace 106-point path on the same sampled frames. It writes `summary.json`, `per_frame.csv`,
-and side-by-side images for the frames with the largest crop differences. Both landmark tracks
-are rendered by the same current `AlignRestore` implementation so the report isolates the
-landmark and crop-geometry change:
-
-The legacy and current three-point anchor triangles are drawn over both aligned crops: green is
-legacy InsightFace and magenta is current MediaPipe (`L`, `R`, and `N` mark the two brow anchors
-and nose). The image title and CSV also report the current/legacy affine scale ratio; a value below
-1 means the current crop renders the face smaller.
-
-By default, the MediaPipe triangle is contracted to `0.94` of its original size around its centroid.
-This keeps the anchor centre unchanged and makes the aligned face about 6.4% larger, matching the
-scale of the legacy training crops more closely. On Windows PowerShell, test another value with:
+By default, the MediaPipe triangle is contracted to `0.935` of its original size around its
+centroid. This keeps the anchor centre unchanged and makes the aligned face about 7% larger,
+matching the scale of the LatentSync training crops more closely. On Windows PowerShell, override
+the value with:
 
 ```powershell
 $env:LATENTSYNC_FACE_ANCHOR_SCALE = "0.96"
 ```
 
-Use `1.0` to disable the contraction. The comparison script can test a value directly without
-changing the inference environment:
-
-```bash
-python compare_affine_backends.py --video path/to/input.mp4 --device cuda --anchor-scale 0.94
-```
-
-The regular and batch inference commands also accept `--anchor-scale`; the environment variable
-remains available as the default when the command-line option is omitted.
-
-To compare every supported video directly inside a directory:
-
-```bash
-python compare_affine_backends.py --input-dir path/to/videos --device cuda
-```
-
-Add `--recursive` to include nested directories. Each video gets its own output directory; the
-root output directory also contains `batch_summary.json` and `per_video.csv` for the full batch.
-
-InsightFace and its pretrained weights are temporary test-only dependencies and are deliberately
-not included in `requirements.txt`. Remove them after the comparison. Optional
-`--max-p95-anchor-nrmse` and `--max-p95-crop-mae` limits make the script exit non-zero when a
-measured regression exceeds a threshold.
+Use `1.0` to disable the contraction. The regular and batch inference commands also accept
+`--anchor-scale`; the environment variable remains available as the default when the command-line
+option is omitted.
 
 ## 🚀 Inference
 

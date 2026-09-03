@@ -34,7 +34,7 @@ MAX_LANDMARK_INTERPOLATION_GAP = 25
 # Contracting it around its centroid increases the aligned face scale while
 # keeping the triangle centre fixed.  Override this for regression experiments
 # without changing code, e.g. LATENTSYNC_FACE_ANCHOR_SCALE=1.0 disables it.
-DEFAULT_FACE_ANCHOR_SCALE = 0.94
+DEFAULT_FACE_ANCHOR_SCALE = 0.935
 LEFT_BROW_LANDMARKS = [105, 66]
 RIGHT_BROW_LANDMARKS = [334, 296]
 NOSE_LANDMARKS = [1, 4, 19, 94]
