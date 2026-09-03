@@ -16,6 +16,7 @@ from latentsync.utils.util import read_video, write_video
 from torchvision import transforms
 import cv2
 from einops import rearrange
+import os
 import torch
 import numpy as np
 from typing import Union
@@ -27,6 +28,47 @@ from .face_detector import FaceDetector
 # Dropping the whole clip for that would be wasteful, so short runs of missing landmarks are filled
 # in from their neighbours. Longer runs mean the face really is gone and the clip is unusable.
 MAX_LANDMARK_INTERPOLATION_GAP = 25
+
+# MediaPipe's corresponding eyebrow/nose triangle is slightly larger than the
+# InsightFace 106-point triangle used to prepare LatentSync's training crops.
+# Contracting it around its centroid increases the aligned face scale while
+# keeping the triangle centre fixed.  Override this for regression experiments
+# without changing code, e.g. LATENTSYNC_FACE_ANCHOR_SCALE=1.0 disables it.
+DEFAULT_FACE_ANCHOR_SCALE = 0.94
+LEFT_BROW_LANDMARKS = [105, 66]
+RIGHT_BROW_LANDMARKS = [334, 296]
+NOSE_LANDMARKS = [1, 4, 19, 94]
+
+
+def resolve_face_anchor_scale(value=None) -> float:
+    if value is None:
+        value = os.environ.get("LATENTSYNC_FACE_ANCHOR_SCALE", DEFAULT_FACE_ANCHOR_SCALE)
+    try:
+        scale = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid face anchor scale: {value!r}") from error
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError(f"Face anchor scale must be finite and greater than zero, got {scale}")
+    return scale
+
+
+def alignment_anchors(face_landmarks: np.ndarray, scale=None) -> np.ndarray:
+    """Return LatentSync's three MediaPipe anchors, contracted about their centroid."""
+    face_landmarks = np.asarray(face_landmarks, dtype=np.float32)
+    if face_landmarks.ndim != 2 or face_landmarks.shape[1] != 2:
+        raise ValueError(f"Expected landmarks shaped (N, 2), got {face_landmarks.shape}")
+
+    anchors = np.asarray(
+        [
+            face_landmarks[LEFT_BROW_LANDMARKS].mean(axis=0),
+            face_landmarks[RIGHT_BROW_LANDMARKS].mean(axis=0),
+            face_landmarks[NOSE_LANDMARKS].mean(axis=0),
+        ],
+        dtype=np.float32,
+    )
+    centre = anchors.mean(axis=0, keepdims=True)
+    anchors = centre + resolve_face_anchor_scale(scale) * (anchors - centre)
+    return np.round(anchors)
 
 
 def interpolate_missing_landmarks(landmarks, max_gap: int = MAX_LANDMARK_INTERPOLATION_GAP):
@@ -75,12 +117,13 @@ def load_fixed_mask(resolution: int, mask_image_path="latentsync/utils/mask.png"
 
 
 class ImageProcessor:
-    def __init__(self, resolution: int = 512, device: str = "cpu", mask_image=None):
+    def __init__(self, resolution: int = 512, device: str = "cpu", mask_image=None, face_anchor_scale=None):
         self.resolution = resolution
         self.resize = transforms.Resize(
             (resolution, resolution), interpolation=transforms.InterpolationMode.BICUBIC, antialias=True
         )
         self.normalize = transforms.Normalize([0.5], [0.5], inplace=True)
+        self.face_anchor_scale = resolve_face_anchor_scale(face_anchor_scale)
 
         self.restorer = AlignRestore(resolution=resolution, device=device)
 
@@ -117,19 +160,14 @@ class ImageProcessor:
         #   nose  = mean(lmk106[[74, 77, 83, 86]])       # nose center
         # InsightFace is not licensed for commercial use, so the detector here is YuNet +
         # MediaPipe FaceMesh. These index sets are the MediaPipe points whose means land on the
-        # same anatomical positions: the InsightFace mean shape (its published 2d106 markup) was
-        # Procrustes-fitted onto the MediaPipe canonical face model through the four eye corners
-        # and the chin, and the sets below were chosen to minimise the residual crop error.
-        # The resulting crop is within ~2% of the InsightFace one (4 px on a 210x280 crop).
+        # same anatomical positions. Their triangle is then contracted around its centroid because
+        # paired-video measurements show that the raw MediaPipe triangle produces a consistently
+        # smaller aligned face than the checkpoint's InsightFace-based training crops.
         #
         # These are eyebrow centers, not eye centers -- the names are kept from upstream. Using
         # eye centers instead shrinks the eye/brow-to-nose span and zooms the crop in by ~31%,
         # which is far outside what the checkpoint was trained on.
-        pt_left_eye = np.mean(face_landmarks[[105, 66]], axis=0)  # left eyebrow center
-        pt_right_eye = np.mean(face_landmarks[[334, 296]], axis=0)  # right eyebrow center
-        pt_nose = np.mean(face_landmarks[[1, 4, 19, 94]], axis=0)  # nose center
-
-        landmarks3 = np.round([pt_left_eye, pt_right_eye, pt_nose])
+        landmarks3 = alignment_anchors(face_landmarks, self.face_anchor_scale)
 
         face, affine_matrix = self.restorer.align_warp_face(image.copy(), landmarks3=landmarks3, smooth=True)
         box = [0, 0, face.shape[1], face.shape[0]]  # x1, y1, x2, y2

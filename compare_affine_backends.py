@@ -29,17 +29,16 @@ import numpy as np
 
 from latentsync.utils.affine_transform import AlignRestore
 from latentsync.utils.face_detector import FaceDetector, cuda_to_int
-from latentsync.utils.image_processor import interpolate_missing_landmarks
+from latentsync.utils.image_processor import (
+    alignment_anchors,
+    interpolate_missing_landmarks,
+    resolve_face_anchor_scale,
+)
 
 
 LEGACY_LEFT_BROW = [43, 48, 49, 51, 50]
 LEGACY_RIGHT_BROW = [101, 102, 103, 104, 105]
 LEGACY_NOSE = [74, 77, 83, 86]
-
-CURRENT_LEFT_BROW = [105, 66]
-CURRENT_RIGHT_BROW = [334, 296]
-CURRENT_NOSE = [1, 4, 19, 94]
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -58,6 +57,12 @@ def parse_args():
     parser.add_argument("--device", default="cuda", help="cuda, cuda:0, ...")
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--detection-interval", type=int, default=5)
+    parser.add_argument(
+        "--anchor-scale",
+        type=float,
+        default=None,
+        help="Contract current three anchors about their centroid (default: 0.94 or LATENTSYNC_FACE_ANCHOR_SCALE)",
+    )
     parser.add_argument("--max-frames", type=int, default=300, help="0 means all frames")
     parser.add_argument("--stride", type=int, default=1, help="Read every Nth source frame")
     parser.add_argument("--visualizations", type=int, default=12)
@@ -81,6 +86,10 @@ def parse_args():
         parser.error("--stride must be at least 1")
     if args.detection_interval < 1:
         parser.error("--detection-interval must be at least 1")
+    try:
+        args.anchor_scale = resolve_face_anchor_scale(args.anchor_scale)
+    except ValueError as error:
+        parser.error(str(error))
     return args
 
 
@@ -200,15 +209,8 @@ def legacy_anchors(points):
     ).round()
 
 
-def current_anchors(points):
-    return np.asarray(
-        [
-            points[CURRENT_LEFT_BROW].mean(axis=0),
-            points[CURRENT_RIGHT_BROW].mean(axis=0),
-            points[CURRENT_NOSE].mean(axis=0),
-        ],
-        dtype=np.float32,
-    ).round()
+def current_anchors(points, scale):
+    return alignment_anchors(points, scale)
 
 
 def percentile(values, q):
@@ -278,7 +280,7 @@ def compare_tracks(video_path, source_indices, legacy_landmarks, current_landmar
             raise RuntimeError("Video frame sequence changed between comparison passes")
 
         old_anchors = legacy_anchors(legacy_landmarks[position])
-        new_anchors = current_anchors(current_landmarks[position])
+        new_anchors = current_anchors(current_landmarks[position], args.anchor_scale)
         old_crop, old_matrix = legacy_aligner.align_warp_face(
             frame.copy(), landmarks3=old_anchors, smooth=True
         )
@@ -391,6 +393,7 @@ def summarize(rows, legacy_missing, current_missing, args, video_path):
         "stride": args.stride,
         "resolution": args.resolution,
         "current_detection_interval": args.detection_interval,
+        "current_anchor_scale": args.anchor_scale,
         "comparison_scope": (
             "Legacy InsightFace and current landmarks rendered through the same current "
             "AlignRestore implementation, isolating landmark/crop-geometry differences"
@@ -551,6 +554,7 @@ def write_batch_report(output_dir, results):
             "sampled_frames": result.get("sampled_frames", ""),
             "legacy_missing": result.get("legacy_missing_before_interpolation", ""),
             "current_missing": result.get("current_missing_before_interpolation", ""),
+            "current_anchor_scale": result.get("current_anchor_scale", ""),
             "anchor_nrmse_p95": "",
             "crop_corner_nerror_p95": "",
             "affine_scale_ratio_p05": "",

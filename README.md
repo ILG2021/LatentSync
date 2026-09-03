@@ -156,8 +156,19 @@ legacy InsightFace and magenta is current MediaPipe (`L`, `R`, and `N` mark the 
 and nose). The image title and CSV also report the current/legacy affine scale ratio; a value below
 1 means the current crop renders the face smaller.
 
+By default, the MediaPipe triangle is contracted to `0.94` of its original size around its centroid.
+This keeps the anchor centre unchanged and makes the aligned face about 6.4% larger, matching the
+scale of the legacy training crops more closely. On Windows PowerShell, test another value with:
+
+```powershell
+$env:LATENTSYNC_FACE_ANCHOR_SCALE = "0.96"
+```
+
+Use `1.0` to disable the contraction. The comparison script can test a value directly without
+changing the inference environment:
+
 ```bash
-python compare_affine_backends.py --video path/to/input.mp4 --device cuda
+python compare_affine_backends.py --video path/to/input.mp4 --device cuda --anchor-scale 0.94
 ```
 
 To compare every supported video directly inside a directory:
