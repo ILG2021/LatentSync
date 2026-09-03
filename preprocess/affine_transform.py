@@ -21,6 +21,7 @@ from multiprocessing import Process
 import shutil
 
 paths = []
+FFMPEG_TIMEOUT_SECONDS = 300
 
 
 def gather_video_paths(input_dir, output_dir):
@@ -39,27 +40,33 @@ def combine_video_audio(video_frames, video_input_path, video_output_path, proce
     video_name = os.path.basename(video_input_path)[:-4]
     audio_temp = os.path.join(process_temp_dir, f"{video_name}_temp.wav")
     video_temp = os.path.join(process_temp_dir, f"{video_name}_temp.mp4")
+    output_temp = os.path.join(process_temp_dir, f"{video_name}_output.mp4")
 
     try:
         write_video(video_temp, video_frames, fps=25)
 
         # Explicitly map audio stream to avoid issues with other metadata streams
-        command = (
-            f'ffmpeg -y -loglevel info -i "{video_input_path}" -vn -acodec pcm_s16le '
-            f'-ar 16000 -ac 1 "{audio_temp}"'
-        )
-        subprocess.run(command, shell=True, check=True)
+        command = [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-i", video_input_path, "-vn", "-acodec", "pcm_s16le",
+            "-ar", "16000", "-ac", "1", audio_temp,
+        ]
+        subprocess.run(command, check=True, timeout=FFMPEG_TIMEOUT_SECONDS)
 
         os.makedirs(os.path.dirname(video_output_path), exist_ok=True)
-        command = (
-            f'ffmpeg -y -loglevel info -i "{video_temp}" -i "{audio_temp}" -c:v libx264 -c:a aac '
-            f'-map 0:v -map 1:a -q:v 0 -q:a 0 "{video_output_path}"'
-        )
-        subprocess.run(command, shell=True, check=True)
+        command = [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-i", video_temp, "-i", audio_temp,
+            "-c:v", "libx264", "-c:a", "aac",
+            "-map", "0:v", "-map", "1:a", "-shortest",
+            "-q:v", "0", "-q:a", "0", output_temp,
+        ]
+        subprocess.run(command, check=True, timeout=FFMPEG_TIMEOUT_SECONDS)
+        os.replace(output_temp, video_output_path)
     finally:
         # Without this the next clip inherits a stale temp file, and a failed audio extraction used
         # to raise FileNotFoundError here and take the whole worker process down with it.
-        for temp_path in (audio_temp, video_temp):
+        for temp_path in (audio_temp, video_temp, output_temp):
             if os.path.isfile(temp_path):
                 os.remove(temp_path)
 
@@ -71,6 +78,7 @@ def func(paths, process_temp_dir, device_id, resolution):
     for video_input, video_output in paths:
         if os.path.isfile(video_output):
             continue
+        print(f"Processing: {video_input}", flush=True)
         try:
             video_frames = video_processor.affine_transform_video(video_input)
         except Exception as e:  # Handle the exception of face not detcted
@@ -83,7 +91,7 @@ def func(paths, process_temp_dir, device_id, resolution):
         except Exception as e:
             print(f"Failed to combine audio and video: {type(e).__name__} - {e} - {video_input}")
             continue
-        print(f"Saved: {video_output}")
+        print(f"Saved: {video_output}", flush=True)
 
 
 def split(a, n):
@@ -125,6 +133,13 @@ def affine_transform_multi_gpus(input_dir, output_dir, temp_dir, resolution, num
 
     for process in processes:
         process.join()
+
+    failed_processes = [process for process in processes if process.exitcode != 0]
+    if failed_processes:
+        failures = ", ".join(
+            f"pid={process.pid}, exitcode={process.exitcode}" for process in failed_processes
+        )
+        raise RuntimeError(f"Affine transform workers failed: {failures}")
 
 
 if __name__ == "__main__":
