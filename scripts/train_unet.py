@@ -119,7 +119,13 @@ class SelectiveActivationOffload:
 
 def verify_activation_offload(device, pin_memory):
     """Fail fast if this PyTorch/CUDA build cannot round-trip saved activations correctly."""
-    source = torch.linspace(-1, 1, 1024 * 1024, device=device, dtype=torch.float16).reshape(1024, 1024)
+    # Some CUDA builds implement a large fp16 linspace with a half-precision element index. Once
+    # that index exceeds 65504 the generated test input itself contains NaNs, falsely blaming the
+    # offload round-trip. Generate indices in fp32, then cast the finished values to fp16.
+    source = torch.linspace(-1, 1, 1024 * 1024, device=device, dtype=torch.float32)
+    source = source.to(dtype=torch.float16).reshape(1024, 1024)
+    if not torch.isfinite(source).all():
+        raise RuntimeError("Activation offload self-test input unexpectedly contains NaN or Inf.")
     value = source.detach().clone().requires_grad_(True)
     offload = SelectiveActivationOffload(min_bytes=1, pin_memory=pin_memory)
     with offload:
