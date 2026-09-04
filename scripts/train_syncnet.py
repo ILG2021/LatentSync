@@ -20,30 +20,25 @@ import shutil
 
 from latentsync.data.syncnet_dataset import SyncNetDataset
 from latentsync.models.stable_syncnet import StableSyncNet
-from latentsync.utils.util import gather_loss, plot_loss_chart
+from latentsync.utils.util import plot_loss_chart
 from accelerate.utils import set_seed
 
 import torch
 from diffusers import AutoencoderKL
 from diffusers.utils.logging import get_logger
 from einops import rearrange
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
-from latentsync.utils.util import init_dist, cosine_loss, dummy_context
+from latentsync.utils.util import cosine_loss
 
 logger = get_logger(__name__)
 
 
 def main(config):
-    # Initialize distributed training
-    local_rank = init_dist()
-    global_rank = dist.get_rank()
-    num_processes = dist.get_world_size()
-    is_main_process = global_rank == 0
+    if not torch.cuda.is_available():
+        raise RuntimeError("No CUDA GPU is available for training.")
+    device = torch.device("cuda:0")
+    torch.cuda.set_device(device)
 
-    seed = config.run.seed + global_rank
-    set_seed(seed)
+    set_seed(config.run.seed)
 
     # Logging folder
     # "%H-%M-%S" rather than "%H:%M:%S": a colon is not a legal filename character on
@@ -58,14 +53,10 @@ def main(config):
         level=logging.INFO,
     )
 
-    # Handle the output folder creation
-    if is_main_process:
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
-        os.makedirs(f"{output_dir}/loss_charts", exist_ok=True)
-        shutil.copy(config.config_path, output_dir)
-
-    device = torch.device(local_rank)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
+    os.makedirs(f"{output_dir}/loss_charts", exist_ok=True)
+    shutil.copy(config.config_path, output_dir)
 
     if config.data.latent_space:
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16)
@@ -78,24 +69,18 @@ def main(config):
     train_dataset = SyncNetDataset(config.data.train_data_dir, config.data.train_fileslist, config)
     val_dataset = SyncNetDataset(config.data.val_data_dir, config.data.val_fileslist, config)
 
-    train_distributed_sampler = DistributedSampler(
-        train_dataset,
-        num_replicas=num_processes,
-        rank=global_rank,
-        shuffle=True,
-        seed=config.run.seed,
-    )
+    data_generator = torch.Generator()
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=config.data.batch_size,
-        shuffle=False,
-        sampler=train_distributed_sampler,
+        shuffle=True,
         num_workers=config.data.num_workers,
         pin_memory=False,
         drop_last=True,
         worker_init_fn=train_dataset.worker_init_fn,
+        generator=data_generator,
     )
 
     num_samples_limit = 640
@@ -128,8 +113,7 @@ def main(config):
     val_loss_list = []
 
     if config.ckpt.resume_ckpt_path != "":
-        if is_main_process:
-            logger.info(f"Load checkpoint from: {config.ckpt.resume_ckpt_path}")
+        logger.info(f"Load checkpoint from: {config.ckpt.resume_ckpt_path}")
         ckpt = torch.load(config.ckpt.resume_ckpt_path, map_location=device, weights_only=True)
 
         syncnet.load_state_dict(ckpt["state_dict"])
@@ -141,35 +125,29 @@ def main(config):
             val_step_list = ckpt["val_step_list"]
             val_loss_list = ckpt["val_loss_list"]
 
-    # DDP wrapper
-    syncnet = DDP(syncnet, device_ids=[local_rank], output_device=local_rank)
-
     num_update_steps_per_epoch = math.ceil(len(train_dataloader))
     num_train_epochs = math.ceil(config.run.max_train_steps / num_update_steps_per_epoch)
 
-    if is_main_process:
-        logger.info("***** Running training *****")
-        logger.info(f"  Num examples = {len(train_dataset)}")
-        logger.info(f"  Num Epochs = {num_train_epochs}")
-        logger.info(f"  Instantaneous batch size per device = {config.data.batch_size}")
-        logger.info(
-            f"  Total train batch size (w. parallel & distributed & accumulation) = {config.data.batch_size * num_processes * config.data.gradient_accumulation_steps}"
-        )
-        logger.info(f"  Total optimization steps = {config.run.max_train_steps}")
+    logger.info("***** Running single-GPU training *****")
+    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num Epochs = {num_train_epochs}")
+    logger.info(f"  Batch size = {config.data.batch_size}")
+    logger.info(
+        f"  Effective batch size with accumulation = "
+        f"{config.data.batch_size * config.data.gradient_accumulation_steps}"
+    )
+    logger.info(f"  Total optimization steps = {config.run.max_train_steps}")
 
     first_epoch = global_step // num_update_steps_per_epoch
-    num_val_batches = config.data.num_val_samples // (num_processes * config.data.batch_size)
+    num_val_batches = config.data.num_val_samples // config.data.batch_size
 
-    # Only show the progress bar once on each machine.
-    progress_bar = tqdm(
-        range(0, config.run.max_train_steps), initial=global_step, desc="Steps", disable=not is_main_process
-    )
+    progress_bar = tqdm(range(0, config.run.max_train_steps), initial=global_step, desc="Steps")
 
     # Support mixed-precision training
     scaler = torch.amp.GradScaler("cuda") if config.run.mixed_precision_training else None
 
     for epoch in range(first_epoch, num_train_epochs):
-        train_dataloader.sampler.set_epoch(epoch)
+        data_generator.manual_seed(config.run.seed + epoch)
         syncnet.train()
         step_loss = 0
         optimizer.zero_grad()
@@ -210,21 +188,14 @@ def main(config):
                 height = frames.shape[2]
                 frames = frames[:, :, height // 2 :, :]
 
-            # Disable gradient sync for the first N-1 steps, enable sync on the final step
-            with syncnet.no_sync() if (index + 1) % config.data.gradient_accumulation_steps != 0 else dummy_context():
-                # Mixed-precision training
-                with torch.autocast(
-                    device_type="cuda", dtype=torch.float16, enabled=config.run.mixed_precision_training
-                ):
-                    vision_embeds, audio_embeds = syncnet(frames, audio_samples)
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=config.run.mixed_precision_training):
+                vision_embeds, audio_embeds = syncnet(frames, audio_samples)
 
-                loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), y).mean()
-                loss = loss / config.data.gradient_accumulation_steps
+            loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), y).mean()
+            loss = loss / config.data.gradient_accumulation_steps
 
-                # Backpropagate
-                scaler.scale(loss).backward()
-
-            step_loss += gather_loss(loss, device)
+            scaler.scale(loss).backward()
+            step_loss += loss.item()
 
             # Update parameters when the accumulation steps are reached
             if (index + 1) % config.data.gradient_accumulation_steps == 0:
@@ -242,7 +213,7 @@ def main(config):
                 train_step_list.append(global_step)
                 train_loss_list.append(step_loss)
 
-                if is_main_process and global_step % config.run.validation_steps == 0:
+                if global_step % config.run.validation_steps == 0:
                     logger.info(f"Validation at step {global_step}")
                     val_loss = validation(
                         val_dataloader,
@@ -262,11 +233,11 @@ def main(config):
                         ("Val loss", val_step_list, val_loss_list),
                     )
 
-                if is_main_process and global_step % config.ckpt.save_ckpt_steps == 0:
+                if global_step % config.ckpt.save_ckpt_steps == 0:
                     checkpoint_save_path = os.path.join(output_dir, f"checkpoints/checkpoint-{global_step}.pt")
                     torch.save(
                         {
-                            "state_dict": syncnet.module.state_dict(),  # to unwrap DDP
+                            "state_dict": syncnet.state_dict(),
                             "global_step": global_step,
                             "train_step_list": train_step_list,
                             "train_loss_list": train_loss_list,
@@ -284,7 +255,6 @@ def main(config):
                     break
 
     progress_bar.close()
-    dist.destroy_process_group()
 
 
 @torch.no_grad()

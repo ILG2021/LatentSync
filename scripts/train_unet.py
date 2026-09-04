@@ -28,10 +28,7 @@ from einops import rearrange
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 import diffusers
 from diffusers import AutoencoderKL, DDIMScheduler
@@ -44,7 +41,6 @@ from latentsync.models.unet import UNet3DConditionModel
 from latentsync.models.stable_syncnet import StableSyncNet
 from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
 from latentsync.utils.util import (
-    init_dist,
     cosine_loss,
     one_step_sampling,
     read_audio,
@@ -252,14 +248,12 @@ def validation_sync_confidence(syncnet, generated_faces, audio_path, syncnet_con
 
 
 def main(config):
-    # Initialize distributed training
-    local_rank = init_dist()
-    global_rank = dist.get_rank()
-    num_processes = dist.get_world_size()
-    is_main_process = global_rank == 0
+    if not torch.cuda.is_available():
+        raise RuntimeError("No CUDA GPU is available for training.")
+    device = torch.device("cuda:0")
+    torch.cuda.set_device(device)
 
-    seed = config.run.seed + global_rank
-    set_seed(seed)
+    set_seed(config.run.seed)
 
     # Logging folder
     # "%H-%M-%S" rather than "%H:%M:%S": a colon is not a legal filename character on
@@ -274,17 +268,13 @@ def main(config):
         level=logging.INFO,
     )
 
-    # Handle the output folder creation
-    if is_main_process:
-        diffusers.utils.logging.set_verbosity_info()
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
-        os.makedirs(f"{output_dir}/val_videos", exist_ok=True)
-        shutil.copy(config.unet_config_path, output_dir)
-        shutil.copy(config.data.syncnet_config_path, output_dir)
-        writer = SummaryWriter(log_dir=os.path.join(output_dir, "tensorboard"))
-
-    device = torch.device(local_rank)
+    diffusers.utils.logging.set_verbosity_info()
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
+    os.makedirs(f"{output_dir}/val_videos", exist_ok=True)
+    shutil.copy(config.unet_config_path, output_dir)
+    shutil.copy(config.data.syncnet_config_path, output_dir)
+    writer = SummaryWriter(log_dir=os.path.join(output_dir, "tensorboard"))
 
     noise_scheduler = DDIMScheduler.from_pretrained("configs")
 
@@ -315,9 +305,8 @@ def main(config):
     )
 
     resume_ckpt_path, keep_global_step = resolve_resume_ckpt_path(config)
-    if is_main_process:
-        continued = "resuming this stage" if keep_global_step else "initialising from the previous stage"
-        logger.info(f"Resume checkpoint ({continued}): {resume_ckpt_path}")
+    continued = "resuming this stage" if keep_global_step else "initialising from the previous stage"
+    logger.info(f"Resume checkpoint ({continued}): {resume_ckpt_path}")
 
     unet, resume_global_step = UNet3DConditionModel.from_pretrained(
         OmegaConf.to_container(config.model),
@@ -355,15 +344,11 @@ def main(config):
         unet.requires_grad_(True)
         trainable_params = list(unet.parameters())
 
-    if config.optimizer.scale_lr:
-        config.optimizer.lr = config.optimizer.lr * num_processes
-
     optimizer, optimizer_name = build_optimizer(config, trainable_params)
 
-    if is_main_process:
-        logger.info(f"trainable params number: {len(trainable_params)}")
-        logger.info(f"trainable params scale: {sum(p.numel() for p in trainable_params) / 1e6:.3f} M")
-        logger.info(f"optimizer: {optimizer_name}")
+    logger.info(f"trainable params number: {len(trainable_params)}")
+    logger.info(f"trainable params scale: {sum(p.numel() for p in trainable_params) / 1e6:.3f} M")
+    logger.info(f"optimizer: {optimizer_name}")
 
     # Enable gradient checkpointing
     if config.run.enable_gradient_checkpointing:
@@ -371,24 +356,18 @@ def main(config):
 
     # Get the training dataset
     train_dataset = UNetDataset(config.data.train_data_dir, config)
-    distributed_sampler = DistributedSampler(
-        train_dataset,
-        num_replicas=num_processes,
-        rank=global_rank,
-        shuffle=True,
-        seed=config.run.seed,
-    )
+    data_generator = torch.Generator()
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=config.data.batch_size,
-        shuffle=False,
-        sampler=distributed_sampler,
+        shuffle=True,
         num_workers=config.data.num_workers,
         pin_memory=False,
         drop_last=True,
         worker_init_fn=train_dataset.worker_init_fn,
+        generator=data_generator,
     )
 
     # Get the training iteration
@@ -419,24 +398,17 @@ def main(config):
     ).to(device)
     pipeline.set_progress_bar_config(disable=True)
 
-    # DDP warpper
-    unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
-
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader))
     # Afterwards we recalculate our number of training epochs
     num_train_epochs = math.ceil(config.run.max_train_steps / num_update_steps_per_epoch)
 
     # Train!
-    total_batch_size = config.data.batch_size * num_processes
-
-    if is_main_process:
-        logger.info("***** Running training *****")
-        logger.info(f"  Num examples = {len(train_dataset)}")
-        logger.info(f"  Num Epochs = {num_train_epochs}")
-        logger.info(f"  Instantaneous batch size per device = {config.data.batch_size}")
-        logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-        logger.info(f"  Total optimization steps = {config.run.max_train_steps}")
+    logger.info("***** Running single-GPU training *****")
+    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num Epochs = {num_train_epochs}")
+    logger.info(f"  Batch size = {config.data.batch_size}")
+    logger.info(f"  Total optimization steps = {config.run.max_train_steps}")
     if resume_global_step >= config.run.max_train_steps:
         raise ValueError(
             f"Resuming at step {resume_global_step}, which is already at or past max_train_steps "
@@ -446,12 +418,10 @@ def main(config):
     global_step = resume_global_step
     first_epoch = resume_global_step // num_update_steps_per_epoch
 
-    # Only show the progress bar once on each machine.
     progress_bar = tqdm(
         range(0, config.run.max_train_steps),
         initial=resume_global_step,
         desc="Steps",
-        disable=not is_main_process,
     )
 
     # Support mixed-precision training
@@ -461,16 +431,16 @@ def main(config):
     # but has a different trainable parameter set, so its optimizer state does not apply.
     if keep_global_step and resume_global_step > 0:
         if load_training_state(resume_ckpt_path, optimizer, lr_scheduler, scaler):
-            if is_main_process:
-                logger.info(f"Restored optimizer/scheduler state from {training_state_path(resume_ckpt_path)}")
-        elif is_main_process:
+            logger.info(f"Restored optimizer/scheduler state from {training_state_path(resume_ckpt_path)}")
+        else:
             logger.warning(
                 f"No training state next to {resume_ckpt_path}; resuming with zeroed optimizer "
                 "moments and the LR schedule replayed from step 0."
             )
 
     for epoch in range(first_epoch, num_train_epochs):
-        train_dataloader.sampler.set_epoch(epoch)
+        # Keep each epoch's shuffle deterministic, including after resuming from a checkpoint.
+        data_generator.manual_seed(config.run.seed + epoch)
         unet.train()
 
         for step, batch in enumerate(train_dataloader):
@@ -651,28 +621,27 @@ def main(config):
                 optimizer.step()
 
             # Check the grad of attn blocks for debugging
-            # print(unet.module.up_blocks[3].attentions[2].transformer_blocks[0].attn2.to_q.weight.grad)
+            # print(unet.up_blocks[3].attentions[2].transformer_blocks[0].attn2.to_q.weight.grad)
 
             lr_scheduler.step()
             progress_bar.update(1)
             global_step += 1
 
-            if is_main_process:
-                writer.add_scalar("train/loss", loss.item(), global_step)
-                writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
-                writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
-                writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
-                writer.add_scalar("train/trepa_loss", float(trepa_loss), global_step)
-                writer.add_scalar("train/learning_rate", lr_scheduler.get_last_lr()[0], global_step)
+            writer.add_scalar("train/loss", loss.item(), global_step)
+            writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
+            writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
+            writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
+            writer.add_scalar("train/trepa_loss", float(trepa_loss), global_step)
+            writer.add_scalar("train/learning_rate", lr_scheduler.get_last_lr()[0], global_step)
 
             ### <<<< Training <<<< ###
 
             # Save checkpoint and conduct validation
-            if is_main_process and (global_step % config.ckpt.save_ckpt_steps == 0):
+            if global_step % config.ckpt.save_ckpt_steps == 0:
                 model_save_path = os.path.join(output_dir, f"checkpoints/checkpoint-{global_step}.pt")
                 state_dict = {
                     "global_step": global_step,
-                    "state_dict": unet.module.state_dict(),
+                    "state_dict": unet.state_dict(),
                 }
                 try:
                     torch.save(state_dict, model_save_path)
@@ -747,9 +716,7 @@ def main(config):
                 break
 
     progress_bar.close()
-    if is_main_process:
-        writer.close()
-    dist.destroy_process_group()
+    writer.close()
 
 
 if __name__ == "__main__":
