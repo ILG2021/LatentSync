@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import math
 import os
 import json
 import time
@@ -38,6 +39,7 @@ def main(config, args):
 
     print(f"Input video path: {args.video_path}")
     print(f"Input audio path: {args.audio_path}")
+    print(f"Video start time: {args.start_time:.3f} seconds")
     print(f"Loaded checkpoint path: {args.inference_ckpt_path}")
     scheduler = DDIMScheduler.from_pretrained("configs")
 
@@ -94,6 +96,7 @@ def main(config, args):
         video_path=args.video_path,
         audio_path=args.audio_path,
         video_out_path=args.video_out_path,
+        start_time=args.start_time,
         num_frames=config.data.num_frames,
         num_inference_steps=args.inference_steps,
         guidance_scale=args.guidance_scale,
@@ -109,6 +112,7 @@ def main(config, args):
         "elapsed_seconds": elapsed_seconds,
         "peak_vram_mb": peak_vram_bytes / (1024 ** 2),
         "video_out_path": os.path.abspath(args.video_out_path),
+        "start_time": args.start_time,
     }
     print("INFERENCE_METRICS=" + json.dumps(metrics, ensure_ascii=False))
     metrics_json_path = getattr(args, "metrics_json", "")
@@ -125,6 +129,12 @@ if __name__ == "__main__":
     parser.add_argument("--video_path", type=str, required=True)
     parser.add_argument("--audio_path", type=str, required=True)
     parser.add_argument("--video_out_path", type=str, required=True)
+    parser.add_argument(
+        "--start_time",
+        type=float,
+        default=0.0,
+        help="Start reading the input video at this time in seconds; audio still starts at 0.",
+    )
     parser.add_argument("--inference_steps", type=int, default=20)
     parser.add_argument("--guidance_scale", type=float, default=1.0)
     parser.add_argument("--temp_dir", type=str, default="temp")
@@ -132,6 +142,8 @@ if __name__ == "__main__":
     parser.add_argument("--enable_deepcache", action="store_true")
     parser.add_argument("--metrics_json", type=str, default="")
     args = parser.parse_args()
+    if not math.isfinite(args.start_time) or args.start_time < 0:
+        parser.error("--start_time must be a finite, non-negative number of seconds")
 
     config = OmegaConf.load(args.unet_config_path)
 

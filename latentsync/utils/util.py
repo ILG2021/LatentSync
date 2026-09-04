@@ -49,7 +49,12 @@ def read_video(
     use_decord=True,
     load_frames=True,
     max_frames: Optional[int] = None,
+    start_time: float = 0.0,
 ):
+    if not np.isfinite(start_time) or start_time < 0:
+        raise ValueError("start_time must be a finite, non-negative number of seconds")
+    if start_time and not change_fps:
+        raise ValueError("start_time requires change_fps=True")
     if change_fps:
         temp_dir = "temp"
         if os.path.exists(temp_dir):
@@ -61,12 +66,16 @@ def read_video(
             "error",
             "-y",
             "-nostdin",
+        ]
+        if start_time:
+            command.extend(["-ss", str(start_time)])
+        command.extend([
             "-i",
             video_path,
             "-an",
             "-r",
             "25",
-        ]
+        ])
         if max_frames is not None:
             if max_frames < 1:
                 raise ValueError("max_frames must be at least 1")

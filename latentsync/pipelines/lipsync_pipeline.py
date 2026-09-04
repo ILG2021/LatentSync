@@ -391,6 +391,7 @@ class LipsyncPipeline(DiffusionPipeline):
         eta: float = 0.0,
         mask_image_path: str = "latentsync/utils/mask.png",
         temp_dir: str = "temp",
+        start_time: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
@@ -414,6 +415,8 @@ class LipsyncPipeline(DiffusionPipeline):
 
         # 2. Check inputs
         self.check_inputs(height, width, callback_steps)
+        if not math.isfinite(start_time) or start_time < 0:
+            raise ValueError("start_time must be a finite, non-negative number of seconds")
 
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
@@ -440,6 +443,7 @@ class LipsyncPipeline(DiffusionPipeline):
             use_decord=False,
             load_frames=False,
             max_frames=len(whisper_chunks),
+            start_time=start_time,
         )
         vr_temp = decord.VideoReader(video_path_25fps)
         num_frames_total = len(vr_temp)

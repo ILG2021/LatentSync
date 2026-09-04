@@ -192,6 +192,7 @@ You can try adjusting the following inference parameters to achieve better resul
 
 - `inference_steps` [20-50]: A higher value improves visual quality but slows down the generation speed.
 - `guidance_scale` [1.0-3.0]: A higher value improves lip-sync accuracy but may cause the video distortion or jitter.
+- `start_time` (seconds, default `0`): Start reading the input video at this timestamp. The input audio still starts at 0.
 
 ## 🔄 Data Processing Pipeline
 
