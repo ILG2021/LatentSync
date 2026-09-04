@@ -184,7 +184,7 @@ python -c "from latentsync.whisper.audio2feature import Audio2Feature; e = Audio
 torchrun --nnodes=1 --nproc_per_node=1 --master_port=25679 -m scripts.train_unet --unet_config_path "configs/unet/stage1_512.yaml"
 ```
 
-或直接 `./train_unet.sh` / `.\train_unet.ps1`。
+或直接 `./train_unet.sh` / `.\train_unet_stage1.ps1`。
 
 ### stage1 在做什么
 
@@ -271,6 +271,8 @@ motion_module_decoder_only: true              # 时序层只放 decoder
 ```bash
 torchrun --nnodes=1 --nproc_per_node=1 --master_port=25679 -m scripts.train_unet --unet_config_path "configs/unet/stage2_512_efficient.yaml"
 ```
+
+Windows PowerShell 可直接运行 `.\train_unet_stage2_efficient.ps1`。若显存足够并希望使用完整配置，则运行 `.\train_unet_stage2.ps1`。
 
 ### 自动衔接
 

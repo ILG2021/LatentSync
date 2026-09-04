@@ -19,6 +19,7 @@ import os
 import subprocess
 from multiprocessing import Process
 import shutil
+import tempfile
 
 paths = []
 FFMPEG_TIMEOUT_SECONDS = 300
@@ -101,14 +102,16 @@ def split(a, n):
 
 def affine_transform_multi_gpus(input_dir, output_dir, temp_dir, resolution, num_workers):
     print(f"Recursively gathering video paths of {input_dir} ...")
+    paths.clear()
     gather_video_paths(input_dir, output_dir)
     num_devices = torch.cuda.device_count()
     if num_devices == 0:
         raise RuntimeError("No GPUs found")
 
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
     os.makedirs(temp_dir, exist_ok=True)
+    # A cancelled Windows run can leave an ffmpeg child holding a file open. Never delete the
+    # shared temp root at startup; use an isolated directory so a stale lock cannot block restart.
+    run_temp_dir = tempfile.mkdtemp(prefix="affine_run_", dir=temp_dir)
 
     split_paths = list(split(paths, num_workers * num_devices))
 
@@ -123,7 +126,7 @@ def affine_transform_multi_gpus(input_dir, output_dir, temp_dir, resolution, num
                 target=func,
                 args=(
                     split_paths[process_index],
-                    os.path.join(temp_dir, f"process_{process_index}"),
+                    os.path.join(run_temp_dir, f"process_{process_index}"),
                     i,
                     resolution,
                 ),
@@ -133,6 +136,12 @@ def affine_transform_multi_gpus(input_dir, output_dir, temp_dir, resolution, num
 
     for process in processes:
         process.join()
+
+    try:
+        shutil.rmtree(run_temp_dir)
+    except OSError as error:
+        # Outputs are already complete. A delayed Windows handle release should not fail the run.
+        print(f"Warning: could not remove temporary directory {run_temp_dir}: {error}")
 
     failed_processes = [process for process in processes if process.exitcode != 0]
     if failed_processes:
