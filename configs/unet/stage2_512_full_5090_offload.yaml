@@ -1,14 +1,9 @@
-# Stage2 at 512 resolution with the memory cuts from stage2_efficient:
-#   trepa_loss_weight: 0        -> VideoMAEv2 is never instantiated (the single biggest saving)
-#   trainable_modules: attn2.   -> only the audio cross-attention, not every attention block
-#   motion_module_decoder_only  -> temporal layers in the decoder only
-# stage2_512.yaml needs ~55 GB; this trades temporal-consistency loss and some trainable capacity
-# for a much smaller footprint. If it still does not fit, next cut perceptual_loss_weight to 0
-# (drops LPIPS/VGG), and as a last resort pixel_space_supervise to false -- that disables the sync,
-# perceptual and TREPA losses entirely and leaves reconstruction-only training of the motion layers.
+# Stage2 512 preset for one 32 GiB RTX 5090 on Windows.
+# Keeps SyncNet, LPIPS and TREPA enabled while explicitly offloading saved pixel-loss activations
+# to pinned system RAM. This is slower than the 256 preset, but avoids uncontrolled WDDM paging.
 data:
   syncnet_config_path: configs/syncnet/syncnet_16_pixel_attn.yaml
-  train_output_dir: debug/unet/stage2
+  train_output_dir: debug/unet/stage2_512_full_5090_offload
   train_fileslist: my_data/fileslist.txt
   train_data_dir: ""
   audio_embeds_cache_dir: my_data/cache/embeds
@@ -16,7 +11,7 @@ data:
 
   val_video_path: assets/demo1_video.mp4
   val_audio_path: assets/demo1_audio.wav
-  batch_size: 1 # 4
+  batch_size: 1
   num_workers: 8
   num_frames: 16
   resolution: 512
@@ -26,34 +21,38 @@ data:
   audio_feat_length: [2, 2]
 
 ckpt:
-  # "auto": resume this stage's own newest checkpoint under train_output_dir if there is one,
-  # otherwise start from the newest checkpoint under resume_search_dir (the previous stage).
-  # Set an explicit path to pin a specific checkpoint.
   resume_ckpt_path: auto
   resume_search_dir: debug/unet/stage1
-  save_ckpt_steps: 5000
-  # Keep only the newest N checkpoints. Each is ~5 GB of weights plus a ~2.5 GB
-  # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
-  max_keep_ckpts: 10
+  save_ckpt_steps: 500
+  max_keep_ckpts: 4
 
 run:
   pixel_space_supervise: true
   use_syncnet: true
   sync_loss_weight: 0.05
-  perceptual_loss_weight: 0.1 # 0.1
-  recon_loss_weight: 1 # 1
-  guidance_scale: 1.5 # [1.0 - 3.0]
-  trepa_loss_weight: 0
+  perceptual_loss_weight: 0.1
+  recon_loss_weight: 1
+  guidance_scale: 1.5
+  trepa_loss_weight: 10
   inference_steps: 20
   trainable_modules:
     - motion_modules.
-    - attn2.
+    - attentions.
   seed: 1247
   use_mixed_noise: true
-  mixed_noise_alpha: 1 # 1
+  mixed_noise_alpha: 1
   mixed_precision_training: true
+  lpips_mixed_precision: true
   enable_gradient_checkpointing: true
-  max_train_steps: 10000000
+  activation_cpu_offload: true
+  activation_cpu_offload_pin_memory: true
+  # Keep frozen weights and tensors smaller than this on the GPU. Raise to 16 for more speed if
+  # VRAM fits; lower to 4 if Windows still spills into uncontrolled shared GPU memory.
+  activation_cpu_offload_min_mb: 8
+  cudnn_benchmark: true
+  allow_tf32: true
+  log_steps: 10
+  max_train_steps: 2000
   max_train_epochs: -1
 
 optimizer:
@@ -62,8 +61,6 @@ optimizer:
   max_grad_norm: 1.0
   lr_scheduler: constant
   lr_warmup_steps: 0
-  # Quantise AdamW's two moments to 8 bits block-wise. Saves ~7 GiB on the full-parameter
-  # stage1 and ~4 GiB on stage2. Requires bitsandbytes.
   use_8bit_adam: true
 
 model:
@@ -91,19 +88,19 @@ model:
   downsample_padding: 1
   flip_sin_to_cos: true
   freq_shift: 0
-  in_channels: 13 # 49
+  in_channels: 13
   layers_per_block: 2
   mid_block_scale_factor: 1
   norm_eps: 1e-5
   norm_num_groups: 32
-  out_channels: 4 # 16
+  out_channels: 4
   sample_size: 64
-  resnet_time_scale_shift: default # Choose between [default, scale_shift]
+  resnet_time_scale_shift: default
 
   use_motion_module: true
   motion_module_resolutions: [1, 2, 4, 8]
   motion_module_mid_block: false
-  motion_module_decoder_only: true
+  motion_module_decoder_only: false
   motion_module_type: Vanilla
   motion_module_kwargs:
     num_attention_heads: 8

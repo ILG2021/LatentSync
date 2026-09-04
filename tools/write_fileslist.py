@@ -40,6 +40,9 @@ UNET_CONFIGS = {
     "configs/unet/stage1_512.yaml": 30,
     "configs/unet/stage2_512.yaml": 15,
     "configs/unet/stage2_512_efficient.yaml": 15,
+    # Fast single-5090 preset: use a short starting budget and stop on validation quality.
+    "configs/unet/stage2_256_full_5090.yaml": 3,
+    "configs/unet/stage2_512_full_5090_offload.yaml": 3,
 }
 # Small datasets still need enough optimizer steps for the domain shift to take hold.
 MIN_TRAIN_STEPS = 2000

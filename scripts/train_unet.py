@@ -19,6 +19,8 @@ import re
 import shutil
 import datetime
 import logging
+import time
+from contextlib import nullcontext
 from pathlib import Path
 from omegaconf import OmegaConf
 
@@ -55,6 +57,83 @@ logger = get_logger(__name__)
 
 # Sentinel for ckpt.resume_ckpt_path: pick up whatever the previous stage last wrote.
 AUTO_RESUME = "auto"
+
+
+class SelectiveActivationOffload:
+    """Asynchronously offload only large differentiable saved tensors to pinned CPU RAM.
+
+    `torch.autograd.graph.save_on_cpu` is intentionally broad: every tensor saved inside its
+    scope is copied. For this training graph that also means many small tensors and frozen model
+    weights, which adds PCIe traffic without reducing live activation memory. This wrapper keeps
+    those tensors on CUDA and transfers only the large activations that account for the WDDM
+    oversubscription. Pinned copies are non-blocking in both directions.
+    """
+
+    def __init__(self, min_bytes: int, pin_memory: bool = True):
+        self.min_bytes = min_bytes
+        self.pin_memory = pin_memory
+        self.offloaded_bytes = 0
+        self.offloaded_tensors = 0
+        self._context = torch.autograd.graph.saved_tensors_hooks(self._pack, self._unpack)
+
+    def _pack(self, tensor):
+        tensor_bytes = tensor.numel() * tensor.element_size()
+        # Frozen weights/targets do not create an extra activation allocation by being referenced,
+        # and moving them would force a needless H2D copy during backward. Small transfers also
+        # cost more in launch/PCIe latency than they save.
+        if (
+            tensor.device.type != "cuda"
+            or tensor.layout != torch.strided
+            or not tensor.requires_grad
+            or tensor_bytes < self.min_bytes
+        ):
+            return False, tensor.detach()
+
+        # Match PyTorch's save_on_cpu implementation rather than relying on empty_like accepting
+        # a pin_memory keyword, which is not supported by every PyTorch version used by this repo.
+        packed = torch.empty(
+            tensor.size(),
+            dtype=tensor.dtype,
+            layout=tensor.layout,
+            device="cpu",
+            pin_memory=self.pin_memory,
+        )
+        packed.copy_(tensor.detach(), non_blocking=self.pin_memory)
+        self.offloaded_bytes += tensor_bytes
+        self.offloaded_tensors += 1
+        return True, tensor.device, packed
+
+    def _unpack(self, packed):
+        if not packed[0]:
+            return packed[1]
+        _, device, tensor = packed
+        return tensor.to(device, non_blocking=self.pin_memory)
+
+    def __enter__(self):
+        self._context.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return self._context.__exit__(exc_type, exc_value, traceback)
+
+
+def verify_activation_offload(device, pin_memory):
+    """Fail fast if this PyTorch/CUDA build cannot round-trip saved activations correctly."""
+    source = torch.linspace(-1, 1, 1024 * 1024, device=device, dtype=torch.float16).reshape(1024, 1024)
+    value = source.detach().clone().requires_grad_(True)
+    offload = SelectiveActivationOffload(min_bytes=1, pin_memory=pin_memory)
+    with offload:
+        # Accumulate in fp32 so the check itself cannot underflow or overflow in fp16.
+        result = value.square().sum(dtype=torch.float32)
+    result.backward()
+
+    expected_grad = 2 * source
+    torch.testing.assert_close(value.grad, expected_grad, rtol=1e-3, atol=1e-3)
+    if offload.offloaded_tensors == 0:
+        raise RuntimeError("Activation offload self-test did not intercept any saved CUDA tensor.")
+
+    del result, value, source, expected_grad, offload
+    torch.cuda.empty_cache()
 
 
 def find_latest_checkpoint(train_output_dir: str):
@@ -253,6 +332,25 @@ def main(config):
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
 
+    # Fixed-size video batches benefit from cuDNN autotuning. TF32 only affects operations that
+    # remain in fp32; the expensive UNet/VAE forwards still run under fp16 autocast below.
+    torch.backends.cudnn.benchmark = config.run.get("cudnn_benchmark", False)
+    torch.backends.cuda.matmul.allow_tf32 = config.run.get("allow_tf32", False)
+    torch.backends.cudnn.allow_tf32 = config.run.get("allow_tf32", False)
+
+    activation_cpu_offload = bool(config.run.get("activation_cpu_offload", False))
+    activation_cpu_offload_pin_memory = bool(config.run.get("activation_cpu_offload_pin_memory", True))
+    activation_cpu_offload_min_mb = float(config.run.get("activation_cpu_offload_min_mb", 8))
+    if activation_cpu_offload and not config.run.pixel_space_supervise:
+        raise ValueError("activation_cpu_offload requires run.pixel_space_supervise: true")
+    if activation_cpu_offload_min_mb <= 0 or not math.isfinite(activation_cpu_offload_min_mb):
+        raise ValueError("activation_cpu_offload_min_mb must be a finite number greater than zero")
+    activation_cpu_offload_min_bytes = int(activation_cpu_offload_min_mb * 2**20)
+
+    if activation_cpu_offload:
+        verify_activation_offload(device, activation_cpu_offload_pin_memory)
+        print("Activation offload CUDA self-test passed.")
+
     set_seed(config.run.seed)
 
     # Logging folder
@@ -384,7 +482,10 @@ def main(config):
     )
 
     if config.run.perceptual_loss_weight != 0 and config.run.pixel_space_supervise:
-        lpips_loss_func = lpips.LPIPS(net="vgg").to(device)
+        # Keep the canonical fp32 weights/buffers. Autocast below runs supported convolutions in
+        # fp16 without forcing numerically sensitive normalization constants to half precision.
+        lpips_loss_func = lpips.LPIPS(net="vgg").eval().to(device=device)
+        lpips_loss_func.requires_grad_(False)
 
     if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
         trepa_loss_func = TREPALoss(device=device, with_cp=True)
@@ -426,7 +527,13 @@ def main(config):
 
     # Support mixed-precision training
     scaler = torch.amp.GradScaler("cuda") if config.run.mixed_precision_training else None
-
+    log_steps = max(1, int(config.run.get("log_steps", 1)))
+    if activation_cpu_offload:
+        logger.info(
+            "Selective pixel-loss activation CPU offload enabled "
+            f"(pin_memory={activation_cpu_offload_pin_memory}, "
+            f"min_tensor={activation_cpu_offload_min_mb:g} MiB)."
+        )
     # Only for a genuine same-stage resume. Starting a new stage reuses the previous stage's weights
     # but has a different trainable parameter set, so its optimizer state does not apply.
     if keep_global_step and resume_global_step > 0:
@@ -438,6 +545,11 @@ def main(config):
                 "moments and the LR schedule replayed from step 0."
             )
 
+    # Start timing after any multi-GiB optimizer state has been restored, otherwise the first
+    # reported step window includes checkpoint I/O and is not comparable with later windows.
+    perf_window_start = time.perf_counter()
+    perf_window_steps = 0
+
     for epoch in range(first_epoch, num_train_epochs):
         # Keep each epoch's shuffle deterministic, including after resuming from a checkpoint.
         data_generator.manual_seed(config.run.seed + epoch)
@@ -445,6 +557,11 @@ def main(config):
 
         for step, batch in enumerate(train_dataloader):
             ### >>>> Training >>>> ###
+
+            # Release the previous step's gradient buffers before constructing the next forward
+            # graph. set_to_none avoids clearing several GiB of buffers with CUDA kernels and
+            # lowers the peak seen by Windows WDDM before backward starts.
+            optimizer.zero_grad(set_to_none=True)
 
             if config.model.add_audio_layer:
                 if batch["mel"] != []:
@@ -544,65 +661,83 @@ def main(config):
             else:
                 recon_loss = 0
 
-            pred_latents = one_step_sampling(noise_scheduler, pred_noise, timesteps, noisy_gt_latents)
-
-            if config.run.pixel_space_supervise:
-                pred_pixel_values = vae.decode(
-                    rearrange(pred_latents, "b c f h w -> (b f) c h w") / vae.config.scaling_factor
-                    + vae.config.shift_factor
-                ).sample
-
-            if config.run.perceptual_loss_weight != 0 and config.run.pixel_space_supervise:
-                pred_pixel_values_perceptual = pred_pixel_values[:, :, pred_pixel_values.shape[2] // 2 :, :]
-                gt_pixel_values_perceptual = gt_pixel_values[:, :, gt_pixel_values.shape[2] // 2 :, :]
-                lpips_loss = lpips_loss_func(
-                    pred_pixel_values_perceptual.float(), gt_pixel_values_perceptual.float()
-                ).mean()
-            else:
-                lpips_loss = 0
-
-            if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
-                trepa_pred_pixel_values = rearrange(
-                    pred_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
+            # Windows WDDM can silently page oversubscribed CUDA allocations into shared system
+            # memory. That keeps a 512 run alive but causes severe page thrashing. save_on_cpu is a
+            # controlled alternative: selective hooks pack only large differentiable tensors from
+            # the pixel-loss backward to CPU and restore them on demand. UNet activations remain on
+            # the GPU.
+            pixel_loss_context = (
+                SelectiveActivationOffload(
+                    min_bytes=activation_cpu_offload_min_bytes,
+                    pin_memory=activation_cpu_offload_pin_memory,
                 )
-                trepa_gt_pixel_values = rearrange(
-                    gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
-                )
-                trepa_loss = trepa_loss_func(trepa_pred_pixel_values, trepa_gt_pixel_values)
-            else:
-                trepa_loss = 0
-
-            if config.model.add_audio_layer and config.run.use_syncnet:
-                if config.run.pixel_space_supervise:
-                    if config.data.resolution != syncnet_config.data.resolution:
-                        pred_pixel_values = F.interpolate(
-                            pred_pixel_values,
-                            size=(syncnet_config.data.resolution, syncnet_config.data.resolution),
-                            mode="bicubic",
-                        )
-                    syncnet_input = rearrange(
-                        pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames
-                    )
-                else:
-                    syncnet_input = rearrange(pred_latents, "b c f h w -> b (f c) h w")
-
-                if syncnet_config.data.lower_half:
-                    height = syncnet_input.shape[2]
-                    syncnet_input = syncnet_input[:, :, height // 2 :, :]
-                ones_tensor = torch.ones((config.data.batch_size, 1)).float().to(device=device)
-                vision_embeds, audio_embeds = syncnet(syncnet_input, mel)
-                sync_loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), ones_tensor).mean()
-            else:
-                sync_loss = 0
-
-            loss = (
-                recon_loss * config.run.recon_loss_weight
-                + sync_loss * config.run.sync_loss_weight
-                + lpips_loss * config.run.perceptual_loss_weight
-                + trepa_loss * config.run.trepa_loss_weight
+                if activation_cpu_offload and config.run.pixel_space_supervise
+                else nullcontext()
             )
+            with pixel_loss_context:
+                pred_latents = one_step_sampling(noise_scheduler, pred_noise, timesteps, noisy_gt_latents)
 
-            optimizer.zero_grad()
+                if config.run.pixel_space_supervise:
+                    pred_pixel_values = vae.decode(
+                        rearrange(pred_latents, "b c f h w -> (b f) c h w") / vae.config.scaling_factor
+                        + vae.config.shift_factor
+                    ).sample
+
+                if config.run.perceptual_loss_weight != 0 and config.run.pixel_space_supervise:
+                    pred_pixel_values_perceptual = pred_pixel_values[:, :, pred_pixel_values.shape[2] // 2 :, :]
+                    gt_pixel_values_perceptual = gt_pixel_values[:, :, gt_pixel_values.shape[2] // 2 :, :]
+                    if config.run.get("lpips_mixed_precision", False):
+                        with torch.autocast(device_type="cuda", dtype=torch.float16):
+                            lpips_loss = lpips_loss_func(
+                                pred_pixel_values_perceptual, gt_pixel_values_perceptual
+                            ).mean()
+                    else:
+                        lpips_loss = lpips_loss_func(
+                            pred_pixel_values_perceptual.float(), gt_pixel_values_perceptual.float()
+                        ).mean()
+                else:
+                    lpips_loss = 0
+
+                if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
+                    trepa_pred_pixel_values = rearrange(
+                        pred_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
+                    )
+                    trepa_gt_pixel_values = rearrange(
+                        gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
+                    )
+                    trepa_loss = trepa_loss_func(trepa_pred_pixel_values, trepa_gt_pixel_values)
+                else:
+                    trepa_loss = 0
+
+                if config.model.add_audio_layer and config.run.use_syncnet:
+                    if config.run.pixel_space_supervise:
+                        if config.data.resolution != syncnet_config.data.resolution:
+                            pred_pixel_values = F.interpolate(
+                                pred_pixel_values,
+                                size=(syncnet_config.data.resolution, syncnet_config.data.resolution),
+                                mode="bicubic",
+                            )
+                        syncnet_input = rearrange(
+                            pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames
+                        )
+                    else:
+                        syncnet_input = rearrange(pred_latents, "b c f h w -> b (f c) h w")
+
+                    if syncnet_config.data.lower_half:
+                        height = syncnet_input.shape[2]
+                        syncnet_input = syncnet_input[:, :, height // 2 :, :]
+                    ones_tensor = torch.ones((config.data.batch_size, 1)).float().to(device=device)
+                    vision_embeds, audio_embeds = syncnet(syncnet_input, mel)
+                    sync_loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), ones_tensor).mean()
+                else:
+                    sync_loss = 0
+
+                loss = (
+                    recon_loss * config.run.recon_loss_weight
+                    + sync_loss * config.run.sync_loss_weight
+                    + lpips_loss * config.run.perceptual_loss_weight
+                    + trepa_loss * config.run.trepa_loss_weight
+                )
 
             # Backpropagate
             if config.run.mixed_precision_training:
@@ -626,18 +761,45 @@ def main(config):
             lr_scheduler.step()
             progress_bar.update(1)
             global_step += 1
+            perf_window_steps += 1
 
-            writer.add_scalar("train/loss", loss.item(), global_step)
-            writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
-            writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
-            writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
-            writer.add_scalar("train/trepa_loss", float(trepa_loss), global_step)
-            writer.add_scalar("train/learning_rate", lr_scheduler.get_last_lr()[0], global_step)
+            # Calling .item() synchronizes the GPU. Doing that for five losses on every iteration
+            # prevents the CPU from queuing work efficiently, so the fast preset logs periodically.
+            if global_step % log_steps == 0:
+                torch.cuda.synchronize(device)
+                step_seconds = (time.perf_counter() - perf_window_start) / perf_window_steps
+                loss_value = float(loss.detach())
+                writer.add_scalar("train/loss", loss_value, global_step)
+                writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
+                writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
+                writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
+                writer.add_scalar("train/trepa_loss", float(trepa_loss), global_step)
+                writer.add_scalar("train/learning_rate", lr_scheduler.get_last_lr()[0], global_step)
+                writer.add_scalar("train/step_seconds", step_seconds, global_step)
+                writer.add_scalar(
+                    "train/vram_allocated_gib", torch.cuda.memory_allocated(device) / 2**30, global_step
+                )
+                writer.add_scalar(
+                    "train/vram_reserved_gib", torch.cuda.memory_reserved(device) / 2**30, global_step
+                )
+                if activation_cpu_offload and config.run.pixel_space_supervise:
+                    writer.add_scalar(
+                        "train/offloaded_activation_gib",
+                        pixel_loss_context.offloaded_bytes / 2**30,
+                        global_step,
+                    )
+                    writer.add_scalar(
+                        "train/offloaded_tensor_count", pixel_loss_context.offloaded_tensors, global_step
+                    )
+                progress_bar.set_postfix(step_loss=loss_value, step_s=step_seconds, epoch=epoch)
+                perf_window_start = time.perf_counter()
+                perf_window_steps = 0
 
             ### <<<< Training <<<< ###
 
             # Save checkpoint and conduct validation
             if global_step % config.ckpt.save_ckpt_steps == 0:
+                maintenance_started_at = time.perf_counter()
                 model_save_path = os.path.join(output_dir, f"checkpoints/checkpoint-{global_step}.pt")
                 state_dict = {
                     "global_step": global_step,
@@ -708,9 +870,9 @@ def main(config):
                         logger.warning(f"Unable to calculate validation sync confidence: {type(e).__name__} - {e}")
 
                 writer.flush()
-
-            logs = {"step_loss": loss.item(), "epoch": epoch}
-            progress_bar.set_postfix(**logs)
+                # Saving several GiB and running a full validation video are not optimizer-step
+                # time. Exclude them from the next train/step_seconds window.
+                perf_window_start += time.perf_counter() - maintenance_started_at
 
             if global_step >= config.run.max_train_steps:
                 break

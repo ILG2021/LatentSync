@@ -252,6 +252,8 @@ max_keep_ckpts: 10        # 只保留最新 10 个，更旧的连 sidecar 一起
 |---|---|---|
 | `stage2_512.yaml` | 约 55 GB | 跑不了 |
 | `stage2_512_efficient.yaml` | 未实测，明显更低 | 需要试 |
+| `stage2_256_full_5090.yaml` | 目标为 ≤32 GB | 推荐；保留全部三个监督损失 |
+| `stage2_512_full_5090_offload.yaml` | 约 32 GB VRAM + 系统内存 | 可试；保留全部三个监督损失 |
 
 `stage2_512.yaml` 的 55GB 里参数账只占 8.5 GiB，其余四十多 GB 是 VAE 带梯度解码、TREPA（VideoMAEv2）、LPIPS（VGG16）、SyncNet 的前向图。梯度检查点这四个模块**已经全部开启**，没有剩余余量。
 
@@ -273,12 +275,45 @@ python -m scripts.train_unet --unet_config_path "configs/unet/stage2_512_efficie
 
 Windows PowerShell 可直接运行 `.\train_unet_stage2_efficient.ps1`。若显存足够并希望使用完整配置，则运行 `.\train_unet_stage2.ps1`。
 
+Windows 单张 RTX 5090 建议运行：
+
+```powershell
+.\train_unet_stage2_256_full_5090.ps1
+```
+
+这个预设保留 SyncNet、LPIPS 和 TREPA，将训练分辨率降到 256，但保持
+`model.sample_size: 64`，因此 checkpoint 仍可用于 512 推理。它还会以 FP16 运行 LPIPS、
+每 10 步才同步一次 TensorBoard 指标，并在前向前释放上一轮梯度，避免 WDDM 把激活溢出到
+共享系统内存。`tools/write_fileslist.py` 为它分配 3 passes（至少 2000 步）；这是早停预算，
+不是必须跑完的目标。
+
+若必须在单张 5090 上以 512 训练并保留全部损失，可运行：
+
+```powershell
+.\train_unet_stage2_512_full_5090_offload.ps1
+```
+
+该预设使用选择性 saved-tensor hooks，只把 VAE 解码及 LPIPS、TREPA、SyncNet 分支中
+大于 8 MiB、确实参与梯度的激活异步卸载到锁页系统内存。冻结权重、小 tensor 和 UNet
+前向激活仍留在 GPU，以减少 PCIe 流量。这仍会比纯显存训练慢，但可以避免 WDDM 在约
+47 GB 工作集上进行无控制分页。建议至少 64 GB 系统内存；启动后以第 20 步之后的
+`step_s` 为准，并确认任务管理器里的共享 GPU 内存不再持续增长。TensorBoard 的
+`train/offloaded_activation_gib` 会显示每步实际卸载的逻辑数据量。
+
+启动时会先运行一个小型 CUDA 自检，将已保存激活异步搬到 pinned RAM、取回并反向传播，
+然后和解析梯度比较。如果当前 PyTorch/CUDA 组合不兼容，训练会立即报错退出，不会写入错误
+checkpoint。
+
+若仍然使用 WDDM 共享显存，将 `activation_cpu_offload_min_mb` 从 8 降至 4；若已稳定装入
+专用显存，则可以升至 16 来减少传输并提高速度。每次只改一档并比较 20 步后的
+`train/step_seconds`。
+
 ### 自动衔接
 
-两个 stage2 配置都是 `resume_ckpt_path: auto`，按两级回退查找：
+各 stage2 配置都是 `resume_ckpt_path: auto`，按两级回退查找：
 
-1. `debug/unet/stage2/` 有 checkpoint，用自己的最新那个，**步数保留**（续训）
-2. 没有，用 `debug/unet/stage1/` 的最新那个，**步数清零**（新阶段）
+1. 自己的 `train_output_dir` 有 checkpoint，用其中最新的一个，**步数保留**（续训）
+2. 没有，用 `debug/unet/stage1/` 的最新 checkpoint，**步数清零**（新阶段）
 3. 两个都没有，报错
 
 启动日志会说明走的哪条：
