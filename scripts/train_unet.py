@@ -390,7 +390,10 @@ def main(config):
     vae.requires_grad_(False)
     vae.to(device)
 
-    if config.run.pixel_space_supervise:
+    vae_gradient_checkpointing = bool(config.run.get("vae_gradient_checkpointing", True))
+    syncnet_gradient_checkpointing = bool(config.run.get("syncnet_gradient_checkpointing", True))
+    trepa_gradient_checkpointing = bool(config.run.get("trepa_gradient_checkpointing", True))
+    if config.run.pixel_space_supervise and vae_gradient_checkpointing:
         vae.enable_gradient_checkpointing()
 
     if config.model.cross_attention_dim == 768:
@@ -424,9 +427,10 @@ def main(config):
         syncnet_config = OmegaConf.load(config.data.syncnet_config_path)
         if syncnet_config.ckpt.inference_ckpt_path == "":
             raise ValueError("SyncNet path is not provided")
-        syncnet = StableSyncNet(OmegaConf.to_container(syncnet_config.model), gradient_checkpointing=True).to(
-            device=device, dtype=torch.float16
-        )
+        syncnet = StableSyncNet(
+            OmegaConf.to_container(syncnet_config.model),
+            gradient_checkpointing=syncnet_gradient_checkpointing,
+        ).to(device=device, dtype=torch.float16)
         syncnet_checkpoint = torch.load(
             syncnet_config.ckpt.inference_ckpt_path, map_location=device, weights_only=True
         )
@@ -494,7 +498,7 @@ def main(config):
         lpips_loss_func.requires_grad_(False)
 
     if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
-        trepa_loss_func = TREPALoss(device=device, with_cp=True)
+        trepa_loss_func = TREPALoss(device=device, with_cp=trepa_gradient_checkpointing)
 
     # Validation pipeline
     pipeline = LipsyncPipeline(
@@ -539,6 +543,13 @@ def main(config):
             "Selective pixel-loss activation CPU offload enabled "
             f"(pin_memory={activation_cpu_offload_pin_memory}, "
             f"min_tensor={activation_cpu_offload_min_mb:g} MiB)."
+        )
+        logger.info(
+            "Gradient checkpointing: "
+            f"UNet={bool(config.run.enable_gradient_checkpointing)}, "
+            f"VAE={vae_gradient_checkpointing}, "
+            f"SyncNet={syncnet_gradient_checkpointing if config.model.add_audio_layer and config.run.use_syncnet else 'unused'}, "
+            f"TREPA={trepa_gradient_checkpointing if config.run.pixel_space_supervise and config.run.trepa_loss_weight != 0 else 'unused'}"
         )
     # Only for a genuine same-stage resume. Starting a new stage reuses the previous stage's weights
     # but has a different trainable parameter set, so its optimizer state does not apply.

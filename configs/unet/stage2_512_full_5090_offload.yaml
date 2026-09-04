@@ -43,12 +43,18 @@ run:
   mixed_noise_alpha: 1
   mixed_precision_training: true
   lpips_mixed_precision: true
+  # UNet checkpointing is still needed. For the frozen pixel supervisors it is faster to retain
+  # their activations through the selective CPU offload above than to recompute every block in
+  # backward. This uses more pinned system RAM but preserves the exact same losses.
   enable_gradient_checkpointing: true
+  vae_gradient_checkpointing: false
+  syncnet_gradient_checkpointing: false
+  trepa_gradient_checkpointing: false
   activation_cpu_offload: true
   activation_cpu_offload_pin_memory: true
-  # Keep frozen weights and tensors smaller than this on the GPU. Raise to 16 for more speed if
-  # VRAM fits; lower to 4 if Windows still spills into uncontrolled shared GPU memory.
-  activation_cpu_offload_min_mb: 8
+  # Four MiB also catches the per-block VideoMAE token activations. Raise to 8 only if there is
+  # clear dedicated-VRAM headroom; a higher threshold reduces PCIe traffic but retains more VRAM.
+  activation_cpu_offload_min_mb: 4
   cudnn_benchmark: true
   allow_tf32: true
   log_steps: 10

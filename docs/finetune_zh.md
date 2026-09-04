@@ -294,7 +294,7 @@ Windows 单张 RTX 5090 建议运行：
 ```
 
 该预设使用选择性 saved-tensor hooks，只把 VAE 解码及 LPIPS、TREPA、SyncNet 分支中
-大于 8 MiB、确实参与梯度的激活异步卸载到锁页系统内存。冻结权重、小 tensor 和 UNet
+大于 4 MiB、确实参与梯度的激活异步卸载到锁页系统内存。冻结权重、小 tensor 和 UNet
 前向激活仍留在 GPU，以减少 PCIe 流量。这仍会比纯显存训练慢，但可以避免 WDDM 在约
 47 GB 工作集上进行无控制分页。建议至少 64 GB 系统内存；启动后以第 20 步之后的
 `step_s` 为准，并确认任务管理器里的共享 GPU 内存不再持续增长。TensorBoard 的
@@ -304,9 +304,13 @@ Windows 单张 RTX 5090 建议运行：
 然后和解析梯度比较。如果当前 PyTorch/CUDA 组合不兼容，训练会立即报错退出，不会写入错误
 checkpoint。
 
-若仍然使用 WDDM 共享显存，将 `activation_cpu_offload_min_mb` 从 8 降至 4；若已稳定装入
-专用显存，则可以升至 16 来减少传输并提高速度。每次只改一档并比较 20 步后的
-`train/step_seconds`。
+为了避免 backward 重复执行三个大型监督网络，512 offload 预设只保留 UNet gradient
+checkpointing；VAE、SyncNet 和 TREPA 的 checkpointing 默认关闭，由 offload 保存它们的
+激活。这样会增加 pinned 系统内存占用，但通常比“checkpoint 重算 + offload”更快。
+
+若仍然 OOM，可重新打开 `trepa_gradient_checkpointing`，然后依次打开
+`vae_gradient_checkpointing` 和 `syncnet_gradient_checkpointing`。每次只改一项并比较
+20 步后的 `train/step_seconds`。
 
 ### 自动衔接
 
