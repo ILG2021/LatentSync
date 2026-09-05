@@ -264,6 +264,16 @@ def main(config):
 
     resume_ckpt_path, keep_global_step = resolve_resume_ckpt_path(config)
     logger.info("Resume checkpoint (%s): %s", "same stage" if keep_global_step else "previous stage", resume_ckpt_path)
+    if resume_ckpt_path:
+        resume_mode = "RESUME (keep checkpoint step)" if keep_global_step else "PREVIOUS STAGE (reset step to 0)"
+        resume_display = str(Path(resume_ckpt_path).resolve())
+        print(
+            f"\n\033[1;96m{'=' * 80}\n"
+            f"CHECKPOINT: {resume_mode}\n"
+            f"{resume_display}\n"
+            f"{'=' * 80}\033[0m\n",
+            flush=True,
+        )
     unet, resume_global_step = UNet3DConditionModel.from_pretrained(
         OmegaConf.to_container(config.model),
         resume_ckpt_path,
