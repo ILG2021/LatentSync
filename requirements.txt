@@ -21,6 +21,3 @@ numpy==1.26.4
 kornia==0.8.0
 DeepCache==0.1.1
 tensorboard>=2.14
-# Needed when optimizer.use_8bit_adam is enabled. On Blackwell (sm_120) install a build
-# compiled against CUDA 12.8.
-bitsandbytes

@@ -26,15 +26,9 @@ python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0),
 
 期望 capability 为 `(12, 0)`。
 
-### 0.2 bitsandbytes
+### 0.2 优化器
 
-两个 512 配置默认开启 `optimizer.use_8bit_adam`，把 AdamW 的两个动量从 fp32 量化到 8 位，**stage1 省约 7.1 GiB**。
-
-```bash
-pip install bitsandbytes
-```
-
-若报 sm_120 不支持，需要更新的版本；实在装不上，把 `configs/unet/stage1_512.yaml` 的 `optimizer.use_8bit_adam` 改为 `false`（显存需求回到约 30GB，32GB 卡仍能跑但余量很小）。
+训练统一使用 PyTorch AdamW（FP32 状态），不再需要额外优化器依赖。旧优化器状态不能直接恢复；首次迁移时设置 `ckpt.restore_training_state: false`，并选择正常的权重检查点和独立输出目录。后续恢复新训练时改回 `true`。
 
 ### 0.3 模型权重
 
@@ -189,7 +183,7 @@ python -m scripts.train_unet --unet_config_path "configs/unet/stage1_512.yaml"
 
 纯 latent 空间，**只有重建损失**（`pixel_space_supervise: false` 让 LPIPS / TREPA / SyncNet 全部跳过），无时序层，**全参数训练**。目标是让模型适应你的人脸域和分辨率。
 
-显存约 23 GB（含 8-bit Adam）。
+显存占用以实际日志为准；FP32 AdamW 状态约占每个可训练参数元素 8 字节。
 
 ### 首次试跑
 
@@ -217,7 +211,7 @@ tensorboard --logdir debug/unet
 debug/unet/stage1/train-<时间戳>/
   ├─ checkpoints/
   │    ├─ checkpoint-5000.pt                    权重（推理用这个，约 5 GB）
-  │    └─ checkpoint-5000.training_state.pt     优化器/调度器状态（约 2.5 GB，仅续训用）
+  │    └─ checkpoint-5000.training_state.pt     优化器/调度器状态（大小取决于可训练参数量，仅续训用）
   ├─ val_videos/
   ├─ tensorboard/
   └─ stage1_512.yaml                            本次训练的配置快照
@@ -369,9 +363,8 @@ python -m scripts.inference --unet_config_path "configs/unet/stage2_512.yaml" --
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `CUDA out of memory` | 确认 `use_8bit_adam: true` 且 bitsandbytes 已装；看日志 `Peak VRAM` 定位 |
+| `CUDA out of memory` | 查看日志 `Peak VRAM`，降低 batch size 或开启梯度检查点、激活卸载 |
 | `no kernel image is available` | PyTorch 不是 cu128 版，重装（见 0.1） |
-| `bitsandbytes is not installed` | `pip install bitsandbytes`，或把 `use_8bit_adam` 改 `false` |
 | `no checkpoint was found under ...` | stage2 的 `auto` 找不到 stage1 产物，先跑 stage1 |
 | `Resuming at step N ... past max_train_steps` | 续训步数已超预算，调大 `max_train_steps` 或换 checkpoint |
 | `SyncNet path is not provided` | stage2 缺 `checkpoints/stable_syncnet.pt` |

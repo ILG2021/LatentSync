@@ -24,7 +24,7 @@ ckpt:
   resume_ckpt_path: auto
   resume_search_dir: debug/unet/stage1
   save_ckpt_steps: 5000
-  # Keep only the newest N checkpoints. Each is ~5 GB of weights plus a ~2.5 GB
+  # Keep only the newest N checkpoints. Each contains model weights plus an AdamW
   # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
   max_keep_ckpts: 10
 
@@ -54,9 +54,6 @@ optimizer:
   max_grad_norm: 1.0
   lr_scheduler: constant
   lr_warmup_steps: 0
-  # Quantise AdamW's two moments to 8 bits block-wise. Saves ~7 GiB on the full-parameter
-  # stage1 and ~4 GiB on stage2. Requires bitsandbytes.
-  use_8bit_adam: true
 
 model:
   act_fn: silu

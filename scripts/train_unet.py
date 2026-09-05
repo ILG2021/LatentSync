@@ -172,7 +172,7 @@ def training_state_path(checkpoint_path):
     """Sidecar holding optimizer / scheduler / scaler state for `checkpoint_path`.
 
     Kept out of the checkpoint itself so the weights file stays loadable by inference and stays the
-    size it is now -- the 8-bit AdamW moments alone would add about 2.5 GiB to every save.
+    size independent of optimizer state. FP32 AdamW moments use 8 bytes per trainable element.
     """
     return str(Path(checkpoint_path).with_suffix(".training_state.pt"))
 
@@ -230,8 +230,8 @@ def require_finite_weights(named_parameters, context):
 def prune_checkpoints(checkpoints_dir, max_keep):
     """Keep only the newest `max_keep` checkpoints, deleting their sidecars along with them.
 
-    A full run writes max_train_steps / save_ckpt_steps checkpoints at roughly 7.5 GB each (5 GB of
-    weights plus the training state), which is hundreds of GB on a real dataset. `max_keep` of 0 or
+    A full run writes max_train_steps / save_ckpt_steps checkpoints, each containing model
+    weights plus the training state, which is hundreds of GB on a real dataset. `max_keep` of 0 or
     less keeps everything.
     """
     if not max_keep or max_keep <= 0:
@@ -253,27 +253,8 @@ def prune_checkpoints(checkpoints_dir, max_keep):
 
 
 def build_optimizer(config, trainable_params):
-    """AdamW, optionally keeping its moments in 8 bits.
-
-    AdamW stores two fp32 moments per parameter. For this 1.27B UNet that is 10.1 GiB on its own,
-    more than the weights and the gradients put together. bitsandbytes quantises the moments
-    block-wise -- a separate fp32 scale per block of values -- which brings that down to about
-    2.5 GiB. The per-block scale is what makes it safe: a plain fp16 moment would flush squared
-    gradients (1e-8 and below) to zero, and a bf16 one has too few mantissa bits to hold them.
-    """
-    if not config.optimizer.get("use_8bit_adam", False):
-        return torch.optim.AdamW(trainable_params, lr=config.optimizer.lr), "AdamW (fp32 states)"
-
-    try:
-        import bitsandbytes as bnb
-    except ImportError as e:
-        raise ImportError(
-            "optimizer.use_8bit_adam is set, but bitsandbytes is not installed. Install it with "
-            "`pip install bitsandbytes` -- on Blackwell (sm_120) you need a build against CUDA "
-            "12.8 -- or set optimizer.use_8bit_adam to false."
-        ) from e
-
-    return bnb.optim.AdamW8bit(trainable_params, lr=config.optimizer.lr), "AdamW8bit (bitsandbytes)"
+    """Use PyTorch AdamW with full-precision optimizer states for every training preset."""
+    return torch.optim.AdamW(trainable_params, lr=config.optimizer.lr), "AdamW (fp32 states)"
 
 
 def resolve_resume_ckpt_path(config):

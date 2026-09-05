@@ -1,5 +1,5 @@
 # First recovery run: load step 1000 weights with fresh PyTorch AdamW state.
-# AdamW requires more VRAM than the original 8-bit preset.
+# FP32 AdamW states require 8 bytes per trainable parameter element.
 # To continue THIS recovery run later, set resume_ckpt_path: auto and
 # restore_training_state: true. Otherwise it deliberately starts from 1000 again.
 # Keeps SyncNet, LPIPS and TREPA enabled while explicitly offloading saved pixel-loss activations
@@ -73,7 +73,6 @@ optimizer:
   max_grad_norm: 1.0
   lr_scheduler: constant
   lr_warmup_steps: 0
-  use_8bit_adam: false
 
 model:
   act_fn: silu
@@ -124,4 +123,3 @@ model:
     temporal_position_encoding_max_len: 24
     temporal_attention_dim_div: 1
     zero_initialize: true
-
