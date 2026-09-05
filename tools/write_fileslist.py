@@ -60,6 +60,7 @@ def load_pinned_val_clips(path):
 
 
 def save_pinned_val_clips(path, video_paths):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for video_path in video_paths:
             f.write(video_path + "\n")
@@ -165,6 +166,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.num_val_clips < 1:
         parser.error("--num_val_clips must be at least 1")
+    if args.num_processes < 1:
+        parser.error("--num_processes must be at least 1")
+    if os.path.normcase(os.path.abspath(args.fileslist_path)) == os.path.normcase(os.path.abspath(args.val_clips_path)):
+        parser.error("Training and validation lists must use different paths")
 
     random.seed(args.seed)
 
@@ -187,6 +192,7 @@ if __name__ == "__main__":
 
     save_pinned_val_clips(args.val_clips_path, val_video_paths)
 
+    os.makedirs(os.path.dirname(os.path.abspath(args.fileslist_path)), exist_ok=True)
     with open(args.fileslist_path, "w", encoding="utf-8") as f:
         for video_path in tqdm(train_video_paths):
             f.write(f"{video_path}\n")

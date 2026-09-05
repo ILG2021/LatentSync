@@ -18,7 +18,8 @@ data:
   audio_feat_length: [2, 2]
 
 ckpt:
-  resume_ckpt_path: checkpoints/latentsync_unet.pt
+  resume_ckpt_path: auto
+  resume_search_dir: debug/unet/stage1
   save_ckpt_steps: 10000
 
 run:

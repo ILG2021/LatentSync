@@ -18,7 +18,8 @@ import argparse
 import shutil
 import datetime
 import logging
-import time
+import re
+from pathlib import Path
 from contextlib import nullcontext
 from omegaconf import OmegaConf
 
@@ -27,8 +28,6 @@ from einops import rearrange
 
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
-import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 
 import diffusers
@@ -48,9 +47,6 @@ from latentsync.utils.util import (
 from latentsync.utils.util import plot_loss_chart
 from latentsync.whisper.audio2feature import Audio2Feature
 from latentsync.trepa.loss import TREPALoss
-from eval.syncnet import SyncNetEval
-from eval.syncnet_detect import SyncNetDetector
-from eval.eval_sync_conf import syncnet_eval
 import lpips
 
 
@@ -142,6 +138,44 @@ def verify_activation_offload(device, pin_memory):
 
 
 
+def find_latest_checkpoint(root):
+    """Pick the greatest step across fixed and timestamped run directories."""
+    candidates = []
+    for path in Path(root).glob("**/checkpoints/checkpoint-*.pt"):
+        match = re.fullmatch(r"checkpoint-(\d+)", path.stem)
+        if match and path.is_file() and path.stat().st_size > 0:
+            candidates.append((int(match.group(1)), path.stat().st_mtime_ns, str(path)))
+    return max(candidates)[2] if candidates else None
+
+
+def resolve_resume_ckpt_path(config):
+    path = config.ckpt.resume_ckpt_path
+    if path != "auto":
+        return path, True
+    own = find_latest_checkpoint(config.data.train_output_dir)
+    if own:
+        return own, True
+    previous_root = config.ckpt.get("resume_search_dir")
+    previous = find_latest_checkpoint(previous_root) if previous_root else None
+    if previous:
+        return previous, False
+    raise FileNotFoundError(
+        f"No checkpoint found for auto resume in {config.data.train_output_dir} "
+        f"or previous stage {previous_root}. Set an explicit resume_ckpt_path."
+    )
+
+
+def save_checkpoint_atomic(state, path):
+    """Publish a checkpoint only after serialization succeeds; auto ignores .tmp files."""
+    temporary = str(path) + ".tmp"
+    try:
+        torch.save(state, temporary)
+        os.replace(temporary, path)
+    finally:
+        if os.path.isfile(temporary):
+            os.remove(temporary)
+
+
 def main(config):
     # Windows single-GPU adaptation; keep the official rank-0 sampling behavior.
     if not torch.cuda.is_available():
@@ -199,10 +233,21 @@ def main(config):
     if config.run.pixel_space_supervise:
         vae.enable_gradient_checkpointing()
 
-    syncnet_eval_model = SyncNetEval(device=device)
-    syncnet_eval_model.loadParameters("checkpoints/auxiliary/syncnet_v2.model")
-
-    syncnet_detector = SyncNetDetector(device=device, detect_results_dir="detect_results")
+    # Some distributions omit the separate official evaluation package. It is
+    # optional for training and must not be confused with the training SyncNet.
+    syncnet_eval_model = syncnet_detector = syncnet_eval = None
+    if config.model.add_audio_layer:
+        try:
+            from eval.syncnet import SyncNetEval
+            from eval.syncnet_detect import SyncNetDetector
+            from eval.eval_sync_conf import syncnet_eval
+        except ImportError as exc:
+            logger.warning("Official validation scorer unavailable; videos will still be saved: %s", exc)
+            syncnet_eval = None
+        else:
+            syncnet_eval_model = SyncNetEval(device=device)
+            syncnet_eval_model.loadParameters("checkpoints/auxiliary/syncnet_v2.model")
+            syncnet_detector = SyncNetDetector(device=device, detect_results_dir="detect_results")
 
     if config.model.cross_attention_dim == 768:
         whisper_model_path = "checkpoints/whisper/small.pt"
@@ -219,12 +264,16 @@ def main(config):
         audio_feat_length=config.data.audio_feat_length,
     )
 
+    resume_ckpt_path, keep_global_step = resolve_resume_ckpt_path(config)
+    logger.info("Resume checkpoint (%s): %s", "same stage" if keep_global_step else "previous stage", resume_ckpt_path)
     unet, resume_global_step = UNet3DConditionModel.from_pretrained(
         OmegaConf.to_container(config.model),
-        config.ckpt.resume_ckpt_path,
+        resume_ckpt_path,
         device=device,
     )
 
+    if not keep_global_step:
+        resume_global_step = 0
     if config.model.add_audio_layer and config.run.use_syncnet:
         syncnet_config = OmegaConf.load(config.data.syncnet_config_path)
         if syncnet_config.ckpt.inference_ckpt_path == "":
@@ -287,11 +336,20 @@ def main(config):
         drop_last=True,
         worker_init_fn=train_dataset.worker_init_fn,
     )
+    if len(train_dataloader) == 0:
+        raise ValueError("Training dataset must contain at least one full batch.")
+    if config.ckpt.save_ckpt_steps <= 0:
+        raise ValueError("save_ckpt_steps must be positive")
 
     # Get the training iteration
     if config.run.max_train_steps == -1:
         assert config.run.max_train_epochs != -1
         config.run.max_train_steps = config.run.max_train_epochs * len(train_dataloader)
+    if config.run.max_train_steps <= resume_global_step:
+        raise ValueError(
+            f"Checkpoint step {resume_global_step} is already at/past max_train_steps "
+            f"{config.run.max_train_steps}. Increase the budget or choose an earlier checkpoint."
+        )
 
     # Scheduler
     lr_scheduler = get_scheduler(
@@ -343,7 +401,6 @@ def main(config):
         disable=not is_main_process,
     )
 
-    train_step_list = []
     val_step_list = []
     sync_conf_list = []
 
@@ -518,8 +575,6 @@ def main(config):
                     + trepa_loss * config.run.trepa_loss_weight
                 )
 
-            train_step_list.append(global_step)
-
             optimizer.zero_grad()
 
             # Backpropagate
@@ -555,10 +610,10 @@ def main(config):
                     "state_dict": unet.state_dict(),
                 }
                 try:
-                    torch.save(state_dict, model_save_path)
+                    save_checkpoint_atomic(state_dict, model_save_path)
                     logger.info(f"Saved checkpoint to {model_save_path}")
                 except Exception as e:
-                    logger.error(f"Error saving model: {e}")
+                    raise RuntimeError(f"Failed to save checkpoint {model_save_path}") from e
 
                 # Validation
                 logger.info("Running validation... ")
@@ -583,12 +638,12 @@ def main(config):
 
                 val_step_list.append(global_step)
 
-                if config.model.add_audio_layer and os.path.exists(validation_video_out_path):
+                if syncnet_eval is not None and os.path.exists(validation_video_out_path):
                     try:
                         _, conf = syncnet_eval(syncnet_eval_model, syncnet_detector, validation_video_out_path, "temp")
                     except Exception as e:
                         logger.info(e)
-                        conf = 0
+                        conf = float("nan")
                     sync_conf_list.append(conf)
                     plot_loss_chart(
                         os.path.join(output_dir, f"sync_conf_results/sync_conf_chart-{global_step}.png"),
@@ -600,6 +655,8 @@ def main(config):
 
             if global_step >= config.run.max_train_steps:
                 break
+        if global_step >= config.run.max_train_steps:
+            break
 
     progress_bar.close()
 

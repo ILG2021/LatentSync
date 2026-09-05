@@ -29,8 +29,8 @@ from pathlib import Path
 class UNetDataset(Dataset):
     def __init__(self, train_data_dir: str, config):
         if config.data.train_fileslist != "":
-            with open(config.data.train_fileslist) as file:
-                self.video_paths = [line.rstrip() for line in file]
+            with open(config.data.train_fileslist, encoding="utf-8-sig") as file:
+                self.video_paths = [line.strip() for line in file if line.strip()]
         elif train_data_dir != "":
             self.video_paths = []
             for file in os.listdir(train_data_dir):
@@ -39,6 +39,7 @@ class UNetDataset(Dataset):
         else:
             raise ValueError("data_dir and fileslist cannot be both empty")
 
+        self.worker_id = 0  # DataLoader does not call worker_init_fn with num_workers=0.
         self.resolution = config.data.resolution
         self.num_frames = config.data.num_frames
 
