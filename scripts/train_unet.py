@@ -604,210 +604,231 @@ def main(config):
             # Release the previous step's gradient buffers before constructing the next forward
             # graph. set_to_none avoids clearing several GiB of buffers with CUDA kernels and
             # lowers the peak seen by Windows WDDM before backward starts.
-            optimizer.zero_grad(set_to_none=True)
+            # Retry the same batch so rejected updates do not alter resume batch accounting.
+            for amp_attempt in range(17):
+                optimizer.zero_grad(set_to_none=True)
 
-            if config.model.add_audio_layer:
-                if batch["mel"] != []:
-                    mel = batch["mel"].to(device, dtype=torch.float16)
+                if config.model.add_audio_layer:
+                    if batch["mel"] != []:
+                        mel = batch["mel"].to(device, dtype=torch.float16)
 
-                audio_embeds_list = []
-                try:
-                    for idx in range(len(batch["video_path"])):
-                        video_path = batch["video_path"][idx]
-                        start_idx = batch["start_idx"][idx]
+                    audio_embeds_list = []
+                    try:
+                        for idx in range(len(batch["video_path"])):
+                            video_path = batch["video_path"][idx]
+                            start_idx = batch["start_idx"][idx]
 
-                        with torch.no_grad():
-                            audio_feat = audio_encoder.audio2feat(video_path)
-                        audio_embeds = audio_encoder.crop_overlap_audio_window(audio_feat, start_idx)
-                        audio_embeds_list.append(audio_embeds)
-                except Exception as e:
-                    logger.info(f"{type(e).__name__} - {e} - {video_path}")
-                    continue
-                audio_embeds = torch.stack(audio_embeds_list)  # (B, 16, 50, 384)
-                audio_embeds = audio_embeds.to(device, dtype=torch.float16)
-            else:
-                audio_embeds = None
+                            with torch.no_grad():
+                                audio_feat = audio_encoder.audio2feat(video_path)
+                            audio_embeds = audio_encoder.crop_overlap_audio_window(audio_feat, start_idx)
+                            audio_embeds_list.append(audio_embeds)
+                    except Exception as e:
+                        logger.info(f"{type(e).__name__} - {e} - {video_path}")
+                        continue
+                    audio_embeds = torch.stack(audio_embeds_list)  # (B, 16, 50, 384)
+                    audio_embeds = audio_embeds.to(device, dtype=torch.float16)
+                else:
+                    audio_embeds = None
 
-            # Convert videos to latent space
-            gt_pixel_values = batch["gt_pixel_values"].to(device, dtype=torch.float16)
-            masked_pixel_values = batch["masked_pixel_values"].to(device, dtype=torch.float16)
-            masks = batch["masks"].to(device, dtype=torch.float16)
-            ref_pixel_values = batch["ref_pixel_values"].to(device, dtype=torch.float16)
+                # Convert videos to latent space
+                gt_pixel_values = batch["gt_pixel_values"].to(device, dtype=torch.float16)
+                masked_pixel_values = batch["masked_pixel_values"].to(device, dtype=torch.float16)
+                masks = batch["masks"].to(device, dtype=torch.float16)
+                ref_pixel_values = batch["ref_pixel_values"].to(device, dtype=torch.float16)
 
-            gt_pixel_values = rearrange(gt_pixel_values, "b f c h w -> (b f) c h w")
-            masked_pixel_values = rearrange(masked_pixel_values, "b f c h w -> (b f) c h w")
-            masks = rearrange(masks, "b f c h w -> (b f) c h w")
-            ref_pixel_values = rearrange(ref_pixel_values, "b f c h w -> (b f) c h w")
+                gt_pixel_values = rearrange(gt_pixel_values, "b f c h w -> (b f) c h w")
+                masked_pixel_values = rearrange(masked_pixel_values, "b f c h w -> (b f) c h w")
+                masks = rearrange(masks, "b f c h w -> (b f) c h w")
+                ref_pixel_values = rearrange(ref_pixel_values, "b f c h w -> (b f) c h w")
 
-            with torch.no_grad():
-                gt_latents = vae.encode(gt_pixel_values).latent_dist.sample()
-                masked_latents = vae.encode(masked_pixel_values).latent_dist.sample()
-                ref_latents = vae.encode(ref_pixel_values).latent_dist.sample()
+                with torch.no_grad():
+                    gt_latents = vae.encode(gt_pixel_values).latent_dist.sample()
+                    masked_latents = vae.encode(masked_pixel_values).latent_dist.sample()
+                    ref_latents = vae.encode(ref_pixel_values).latent_dist.sample()
 
-            masks = torch.nn.functional.interpolate(masks, size=config.data.resolution // vae_scale_factor)
+                masks = torch.nn.functional.interpolate(masks, size=config.data.resolution // vae_scale_factor)
 
-            gt_latents = (
-                rearrange(gt_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames) - vae.config.shift_factor
-            ) * vae.config.scaling_factor
-            masked_latents = (
-                rearrange(masked_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames)
-                - vae.config.shift_factor
-            ) * vae.config.scaling_factor
-            ref_latents = (
-                rearrange(ref_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames) - vae.config.shift_factor
-            ) * vae.config.scaling_factor
-            masks = rearrange(masks, "(b f) c h w -> b c f h w", f=config.data.num_frames)
+                gt_latents = (
+                    rearrange(gt_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames) - vae.config.shift_factor
+                ) * vae.config.scaling_factor
+                masked_latents = (
+                    rearrange(masked_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames)
+                    - vae.config.shift_factor
+                ) * vae.config.scaling_factor
+                ref_latents = (
+                    rearrange(ref_latents, "(b f) c h w -> b c f h w", f=config.data.num_frames) - vae.config.shift_factor
+                ) * vae.config.scaling_factor
+                masks = rearrange(masks, "(b f) c h w -> b c f h w", f=config.data.num_frames)
 
-            # Sample noise that we'll add to the latents
-            if config.run.use_mixed_noise:
-                # Refer to the paper: https://arxiv.org/abs/2305.10474
-                noise_shared_std_dev = (config.run.mixed_noise_alpha**2 / (1 + config.run.mixed_noise_alpha**2)) ** 0.5
-                noise_shared = torch.randn_like(gt_latents) * noise_shared_std_dev
-                noise_shared = noise_shared[:, :, 0:1].repeat(1, 1, config.data.num_frames, 1, 1)
+                # Sample noise that we'll add to the latents
+                if config.run.use_mixed_noise:
+                    # Refer to the paper: https://arxiv.org/abs/2305.10474
+                    noise_shared_std_dev = (config.run.mixed_noise_alpha**2 / (1 + config.run.mixed_noise_alpha**2)) ** 0.5
+                    noise_shared = torch.randn_like(gt_latents) * noise_shared_std_dev
+                    noise_shared = noise_shared[:, :, 0:1].repeat(1, 1, config.data.num_frames, 1, 1)
 
-                noise_ind_std_dev = (1 / (1 + config.run.mixed_noise_alpha**2)) ** 0.5
-                noise_ind = torch.randn_like(gt_latents) * noise_ind_std_dev
-                noise = noise_ind + noise_shared
-            else:
-                noise = torch.randn_like(gt_latents)
-                noise = noise[:, :, 0:1].repeat(
-                    1, 1, config.data.num_frames, 1, 1
-                )  # Using the same noise for all frames, refer to the paper: https://arxiv.org/abs/2308.09716
+                    noise_ind_std_dev = (1 / (1 + config.run.mixed_noise_alpha**2)) ** 0.5
+                    noise_ind = torch.randn_like(gt_latents) * noise_ind_std_dev
+                    noise = noise_ind + noise_shared
+                else:
+                    noise = torch.randn_like(gt_latents)
+                    noise = noise[:, :, 0:1].repeat(
+                        1, 1, config.data.num_frames, 1, 1
+                    )  # Using the same noise for all frames, refer to the paper: https://arxiv.org/abs/2308.09716
 
-            bsz = gt_latents.shape[0]
+                bsz = gt_latents.shape[0]
 
-            # Sample a random timestep for each video
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=gt_latents.device)
-            timesteps = timesteps.long()
+                # Sample a random timestep for each video
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=gt_latents.device)
+                timesteps = timesteps.long()
 
-            # Add noise to the latents according to the noise magnitude at each timestep
-            # (this is the forward diffusion process)
-            noisy_gt_latents = noise_scheduler.add_noise(gt_latents, noise, timesteps)
+                # Add noise to the latents according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                noisy_gt_latents = noise_scheduler.add_noise(gt_latents, noise, timesteps)
 
-            # Get the target for loss depending on the prediction type
-            if noise_scheduler.config.prediction_type == "epsilon":
-                target = noise
-            elif noise_scheduler.config.prediction_type == "v_prediction":
-                raise NotImplementedError
-            else:
-                raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                # Get the target for loss depending on the prediction type
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    raise NotImplementedError
+                else:
+                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-            unet_input = torch.cat([noisy_gt_latents, masks, masked_latents, ref_latents], dim=1)
+                unet_input = torch.cat([noisy_gt_latents, masks, masked_latents, ref_latents], dim=1)
 
-            # Predict the noise and compute loss
-            # Mixed-precision training
-            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=config.run.mixed_precision_training):
-                pred_noise = unet(unet_input, timesteps, encoder_hidden_states=audio_embeds).sample
+                # Predict the noise and compute loss
+                # Mixed-precision training
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=config.run.mixed_precision_training):
+                    pred_noise = unet(unet_input, timesteps, encoder_hidden_states=audio_embeds).sample
 
-            if config.run.recon_loss_weight != 0:
-                recon_loss = F.mse_loss(pred_noise.float(), target.float(), reduction="mean")
-            else:
-                recon_loss = 0
+                if config.run.recon_loss_weight != 0:
+                    recon_loss = F.mse_loss(pred_noise.float(), target.float(), reduction="mean")
+                else:
+                    recon_loss = 0
 
-            # Windows WDDM can silently page oversubscribed CUDA allocations into shared system
-            # memory. That keeps a 512 run alive but causes severe page thrashing. save_on_cpu is a
-            # controlled alternative: selective hooks pack only large differentiable tensors from
-            # the pixel-loss backward to CPU and restore them on demand. UNet activations remain on
-            # the GPU.
-            pixel_loss_context = (
-                SelectiveActivationOffload(
-                    min_bytes=activation_cpu_offload_min_bytes,
-                    pin_memory=activation_cpu_offload_pin_memory,
+                # Windows WDDM can silently page oversubscribed CUDA allocations into shared system
+                # memory. That keeps a 512 run alive but causes severe page thrashing. save_on_cpu is a
+                # controlled alternative: selective hooks pack only large differentiable tensors from
+                # the pixel-loss backward to CPU and restore them on demand. UNet activations remain on
+                # the GPU.
+                pixel_loss_context = (
+                    SelectiveActivationOffload(
+                        min_bytes=activation_cpu_offload_min_bytes,
+                        pin_memory=activation_cpu_offload_pin_memory,
+                    )
+                    if activation_cpu_offload and config.run.pixel_space_supervise
+                    else nullcontext()
                 )
-                if activation_cpu_offload and config.run.pixel_space_supervise
-                else nullcontext()
-            )
-            with pixel_loss_context:
-                pred_latents = one_step_sampling(noise_scheduler, pred_noise, timesteps, noisy_gt_latents)
+                with pixel_loss_context:
+                    pred_latents = one_step_sampling(noise_scheduler, pred_noise, timesteps, noisy_gt_latents)
 
-                if config.run.pixel_space_supervise:
-                    pred_pixel_values = vae.decode(
-                        rearrange(pred_latents, "b c f h w -> (b f) c h w") / vae.config.scaling_factor
-                        + vae.config.shift_factor
-                    ).sample
+                    if config.run.pixel_space_supervise:
+                        pred_pixel_values = vae.decode(
+                            rearrange(pred_latents, "b c f h w -> (b f) c h w") / vae.config.scaling_factor
+                            + vae.config.shift_factor
+                        ).sample
 
-                if config.run.perceptual_loss_weight != 0 and config.run.pixel_space_supervise:
-                    pred_pixel_values_perceptual = pred_pixel_values[:, :, pred_pixel_values.shape[2] // 2 :, :]
-                    gt_pixel_values_perceptual = gt_pixel_values[:, :, gt_pixel_values.shape[2] // 2 :, :]
-                    if config.run.get("lpips_mixed_precision", False):
-                        with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    if config.run.perceptual_loss_weight != 0 and config.run.pixel_space_supervise:
+                        pred_pixel_values_perceptual = pred_pixel_values[:, :, pred_pixel_values.shape[2] // 2 :, :]
+                        gt_pixel_values_perceptual = gt_pixel_values[:, :, gt_pixel_values.shape[2] // 2 :, :]
+                        if config.run.get("lpips_mixed_precision", False):
+                            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                                lpips_loss = lpips_loss_func(
+                                    pred_pixel_values_perceptual, gt_pixel_values_perceptual
+                                ).mean()
+                        else:
                             lpips_loss = lpips_loss_func(
-                                pred_pixel_values_perceptual, gt_pixel_values_perceptual
+                                pred_pixel_values_perceptual.float(), gt_pixel_values_perceptual.float()
                             ).mean()
                     else:
-                        lpips_loss = lpips_loss_func(
-                            pred_pixel_values_perceptual.float(), gt_pixel_values_perceptual.float()
-                        ).mean()
-                else:
-                    lpips_loss = 0
+                        lpips_loss = 0
 
-                if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
-                    trepa_pred_pixel_values = rearrange(
-                        pred_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
-                    )
-                    trepa_gt_pixel_values = rearrange(
-                        gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
-                    )
-                    trepa_loss = trepa_loss_func(trepa_pred_pixel_values, trepa_gt_pixel_values)
-                else:
-                    trepa_loss = 0
-
-                if config.model.add_audio_layer and config.run.use_syncnet:
-                    if config.run.pixel_space_supervise:
-                        if config.data.resolution != syncnet_config.data.resolution:
-                            pred_pixel_values = F.interpolate(
-                                pred_pixel_values,
-                                size=(syncnet_config.data.resolution, syncnet_config.data.resolution),
-                                mode="bicubic",
-                            )
-                        syncnet_input = rearrange(
-                            pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames
+                    if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
+                        trepa_pred_pixel_values = rearrange(
+                            pred_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
                         )
+                        trepa_gt_pixel_values = rearrange(
+                            gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
+                        )
+                        trepa_loss = trepa_loss_func(trepa_pred_pixel_values, trepa_gt_pixel_values)
                     else:
-                        syncnet_input = rearrange(pred_latents, "b c f h w -> b (f c) h w")
+                        trepa_loss = 0
 
-                    if syncnet_config.data.lower_half:
-                        height = syncnet_input.shape[2]
-                        syncnet_input = syncnet_input[:, :, height // 2 :, :]
-                    ones_tensor = torch.ones((config.data.batch_size, 1)).float().to(device=device)
-                    vision_embeds, audio_embeds = syncnet(syncnet_input, mel)
-                    sync_loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), ones_tensor).mean()
+                    if config.model.add_audio_layer and config.run.use_syncnet:
+                        if config.run.pixel_space_supervise:
+                            if config.data.resolution != syncnet_config.data.resolution:
+                                pred_pixel_values = F.interpolate(
+                                    pred_pixel_values,
+                                    size=(syncnet_config.data.resolution, syncnet_config.data.resolution),
+                                    mode="bicubic",
+                                )
+                            syncnet_input = rearrange(
+                                pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames
+                            )
+                        else:
+                            syncnet_input = rearrange(pred_latents, "b c f h w -> b (f c) h w")
+
+                        if syncnet_config.data.lower_half:
+                            height = syncnet_input.shape[2]
+                            syncnet_input = syncnet_input[:, :, height // 2 :, :]
+                        ones_tensor = torch.ones((config.data.batch_size, 1)).float().to(device=device)
+                        vision_embeds, audio_embeds = syncnet(syncnet_input, mel)
+                        sync_loss = cosine_loss(vision_embeds.float(), audio_embeds.float(), ones_tensor).mean()
+                    else:
+                        sync_loss = 0
+
+                    loss = (
+                        recon_loss * config.run.recon_loss_weight
+                        + sync_loss * config.run.sync_loss_weight
+                        + lpips_loss * config.run.perceptual_loss_weight
+                        + trepa_loss * config.run.trepa_loss_weight
+                    )
+
+                # Stop at the first invalid loss/gradient rather than silently advancing checkpoints.
+                if not torch.isfinite(loss.detach()).all().item():
+                    raise RuntimeError(f"Non-finite loss before update {global_step + 1}; weights were not updated.")
+                if config.run.mixed_precision_training:
+                    scaler.scale(loss).backward()
+                    """ >>> gradient clipping >>> """
+                    scaler.unscale_(optimizer)
+                    bad_grad_names = [
+                        name for name, p in trainable_named_params
+                        if p.grad is not None and not torch.isfinite(p.grad).all().item()
+                    ]
+                    if bad_grad_names:
+                        previous_scale = scaler.get_scale()
+                        # unscale_ has recorded the non-finite gradients. update() applies AMP's
+                        # backoff and clears its per-optimizer bookkeeping without taking a step.
+                        scaler.update()
+                        optimizer.zero_grad(set_to_none=True)
+                        logger.warning(
+                            f"AMP overflow before update {global_step + 1}, attempt {amp_attempt + 1}/17; "
+                            f"scale {previous_scale:g} -> {scaler.get_scale():g}; "
+                            f"non-finite gradients: {', '.join(bad_grad_names[:5])}"
+                        )
+                        if amp_attempt == 16:
+                            raise RuntimeError("AMP gradients remained non-finite after 17 attempts; no update saved.")
+                        continue
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
+                    )
+                    """ <<< gradient clipping <<< """
+                    previous_scale = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    if scaler.get_scale() < previous_scale:
+                        raise RuntimeError("AMP skipped the optimizer update; training stopped without advancing global_step.")
                 else:
-                    sync_loss = 0
+                    loss.backward()
+                    """ >>> gradient clipping >>> """
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
+                    )
+                    """ <<< gradient clipping <<< """
+                    optimizer.step()
 
-                loss = (
-                    recon_loss * config.run.recon_loss_weight
-                    + sync_loss * config.run.sync_loss_weight
-                    + lpips_loss * config.run.perceptual_loss_weight
-                    + trepa_loss * config.run.trepa_loss_weight
-                )
-
-            # Stop at the first invalid loss/gradient rather than silently advancing checkpoints.
-            if not torch.isfinite(loss.detach()).all().item():
-                raise RuntimeError(f"Non-finite loss before update {global_step + 1}; weights were not updated.")
-            if config.run.mixed_precision_training:
-                scaler.scale(loss).backward()
-                """ >>> gradient clipping >>> """
-                scaler.unscale_(optimizer)
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
-                )
-                """ <<< gradient clipping <<< """
-                previous_scale = scaler.get_scale()
-                scaler.step(optimizer)
-                scaler.update()
-                if scaler.get_scale() < previous_scale:
-                    raise RuntimeError("AMP skipped the optimizer update; training stopped without advancing global_step.")
-            else:
-                loss.backward()
-                """ >>> gradient clipping >>> """
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
-                )
-                """ <<< gradient clipping <<< """
-                optimizer.step()
-
-            require_finite_weights(trainable_named_params, f"after optimizer update {global_step + 1}")
+                require_finite_weights(trainable_named_params, f"after optimizer update {global_step + 1}")
+                break
 
             # Check the grad of attn blocks for debugging
             # print(unet.up_blocks[3].attentions[2].transformer_blocks[0].attn2.to_q.weight.grad)

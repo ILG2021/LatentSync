@@ -39,9 +39,7 @@ SEGMENT_INDEX_PATTERN = re.compile(r"_\d+$")
 UNET_CONFIGS = {
     "configs/unet/stage1_512.yaml": 30,
     "configs/unet/stage2_512.yaml": 15,
-    "configs/unet/stage2_512_efficient.yaml": 15,
     # Fast single-5090 preset: use a short starting budget and stop on validation quality.
-    "configs/unet/stage2_256_full_5090.yaml": 3,
     "configs/unet/stage2_512_full_5090_offload.yaml": 3,
 }
 # Small datasets still need enough optimizer steps for the domain shift to take hold.
@@ -160,7 +158,13 @@ if __name__ == "__main__":
     # batch_size * num_processes samples, so a stale value here scales max_train_steps wrongly.
     parser.add_argument("--num_processes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1247)
+    parser.add_argument(
+        "--skip_config_update", action="store_true",
+        help="Only rewrite dataset lists; preserve validation paths and training budgets in configs.",
+    )
     args = parser.parse_args()
+    if args.num_val_clips < 1:
+        parser.error("--num_val_clips must be at least 1")
 
     random.seed(args.seed)
 
@@ -193,7 +197,11 @@ if __name__ == "__main__":
         f"source recording(s) held out for validation)."
     )
 
-    for unet_config_path, passes_per_segment in UNET_CONFIGS.items():
+    config_updates = {} if args.skip_config_update else UNET_CONFIGS
+    for unet_config_path, passes_per_segment in config_updates.items():
+        if not os.path.isfile(unet_config_path):
+            print(f"Skipping missing config: {unet_config_path}")
+            continue
         config = read_config(unet_config_path)
         batch_size = config["data"]["batch_size"]
         save_ckpt_steps = config["ckpt"]["save_ckpt_steps"]
