@@ -316,7 +316,8 @@ def validation_sync_confidence(syncnet, generated_faces, audio_path, syncnet_con
             frames = frames[:, :, frames.shape[2] // 2 :, :]
 
         mel_start_idx = int(80.0 * (start_idx / float(syncnet_config.data.video_fps)))
-        mel = original_mel[:, mel_start_idx : mel_start_idx + mel_window_length].unsqueeze(0)
+        # StableSyncNet's audio Conv2d expects (batch, channel=1, mel_bins, time).
+        mel = original_mel[:, mel_start_idx : mel_start_idx + mel_window_length].unsqueeze(0).unsqueeze(0)
         if mel.shape[-1] != mel_window_length:
             break
 
@@ -528,6 +529,12 @@ def main(config):
         )
     global_step = resume_global_step
     first_epoch = resume_global_step // num_update_steps_per_epoch
+    first_epoch_resume_step = resume_global_step % num_update_steps_per_epoch if keep_global_step else 0
+    if first_epoch_resume_step:
+        logger.info(
+            f"Replaying {first_epoch_resume_step} data batches to restore the deterministic "
+            f"position within epoch {first_epoch}."
+        )
 
     progress_bar = tqdm(
         range(0, config.run.max_train_steps),
@@ -573,6 +580,15 @@ def main(config):
         unet.train()
 
         for step, batch in enumerate(train_dataloader):
+            # Recreate and consume the deterministic shuffle up to the saved position. Without
+            # this, a mid-epoch restart repeats the beginning of that epoch even though the global
+            # step and optimizer state were restored from the checkpoint.
+            if epoch == first_epoch and step < first_epoch_resume_step:
+                continue
+            if epoch == first_epoch and step == first_epoch_resume_step and first_epoch_resume_step:
+                # Dataset replay is startup work, not optimizer-step time.
+                perf_window_start = time.perf_counter()
+
             ### >>>> Training >>>> ###
 
             # Release the previous step's gradient buffers before constructing the next forward
