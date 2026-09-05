@@ -47,10 +47,14 @@ class TREPALoss:
         feats_fake = self.model.forward_features(videos_fake)
         feats_real = self.model.forward_features(videos_real)
 
-        feats_fake = F.normalize(feats_fake, p=2, dim=1)
-        feats_real = F.normalize(feats_real, p=2, dim=1)
-
-        return F.mse_loss(feats_fake, feats_real)
+        # Keep the backbone in half precision, but not the loss head. A half MSE
+        # receives the weighted GradScaler seed in fp16 before applying its mean
+        # reduction, which can overflow even when the forward loss is finite.
+        # FP32 normalization also keeps its epsilon representable for zero features.
+        with torch.autocast(device_type=feats_fake.device.type, enabled=False):
+            feats_fake = F.normalize(feats_fake.float(), p=2, dim=1)
+            feats_real = F.normalize(feats_real.float(), p=2, dim=1)
+            return F.mse_loss(feats_fake, feats_real)
 
 
 if __name__ == "__main__":
