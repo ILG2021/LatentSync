@@ -157,7 +157,7 @@ class AlignRestore:
         inverse_matrix = kornia.geometry.transform.invert_affine_transform(affine_matrix)
 
         # Warp the crop back into frame coordinates and undo the [-1, 1] scaling.
-        face = face.to(dtype=self.dtype).unsqueeze(0)
+        face = face.to(device=self.device, dtype=self.dtype).unsqueeze(0)
         warped_face = kornia.geometry.transform.warp_affine(
             face, inverse_matrix, (height, width), mode="bilinear", padding_mode="fill", fill_value=self.fill_value
         ).squeeze(0)

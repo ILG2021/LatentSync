@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import gc
 import math
 import argparse
 import shutil
@@ -20,6 +21,7 @@ import logging
 import re
 from pathlib import Path
 from contextlib import nullcontext
+from contextlib import contextmanager
 from omegaconf import OmegaConf
 
 from tqdm.auto import tqdm
@@ -50,6 +52,32 @@ import lpips
 
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def validation_resources(pipeline, optimizer, device):
+    """Release validation-only resources even when video generation fails."""
+    was_training = pipeline.unet.training
+    optimizer.zero_grad(set_to_none=True)
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("Before validation: allocated=%.2f GiB, reserved=%.2f GiB",
+                torch.cuda.memory_allocated(device) / 2**30,
+                torch.cuda.memory_reserved(device) / 2**30)
+    try:
+        yield
+    finally:
+        pipeline.unet.train(was_training)
+        processor = getattr(pipeline, "image_processor", None)
+        if processor is not None:
+            processor.release_face_detector()
+            del pipeline.image_processor
+            del processor
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("After validation cleanup: allocated=%.2f GiB, reserved=%.2f GiB",
+                    torch.cuda.memory_allocated(device) / 2**30,
+                    torch.cuda.memory_reserved(device) / 2**30)
 
 
 class SelectiveActivationOffload:
@@ -635,35 +663,36 @@ def main(config):
 
                 validation_video_out_path = os.path.join(output_dir, f"val_videos/val_video_{global_step}.mp4")
 
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    pipeline(
-                        config.data.val_video_path,
-                        config.data.val_audio_path,
-                        validation_video_out_path,
-                        num_frames=config.data.num_frames,
-                        num_inference_steps=config.run.inference_steps,
-                        guidance_scale=config.run.guidance_scale,
-                        weight_dtype=torch.float16,
-                        width=config.data.resolution,
-                        height=config.data.resolution,
-                        mask_image_path=config.data.mask_image_path,
-                    )
+                with validation_resources(pipeline, optimizer, device):
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        pipeline(
+                            config.data.val_video_path,
+                            config.data.val_audio_path,
+                            validation_video_out_path,
+                            num_frames=config.data.num_frames,
+                            num_inference_steps=config.run.inference_steps,
+                            guidance_scale=config.run.guidance_scale,
+                            weight_dtype=torch.float16,
+                            width=config.data.resolution,
+                            height=config.data.resolution,
+                            mask_image_path=config.data.mask_image_path,
+                        )
 
-                logger.info(f"Saved validation video output to {validation_video_out_path}")
+                    logger.info(f"Saved validation video output to {validation_video_out_path}")
 
-                val_step_list.append(global_step)
+                    val_step_list.append(global_step)
 
-                if syncnet_eval is not None and os.path.exists(validation_video_out_path):
-                    try:
-                        _, conf = syncnet_eval(syncnet_eval_model, syncnet_detector, validation_video_out_path, "temp")
-                    except Exception as e:
-                        logger.info(e)
-                        conf = float("nan")
-                    sync_conf_list.append(conf)
-                    plot_loss_chart(
-                        os.path.join(output_dir, f"sync_conf_results/sync_conf_chart-{global_step}.png"),
-                        ("Sync confidence", val_step_list, sync_conf_list),
-                    )
+                    if syncnet_eval is not None and os.path.exists(validation_video_out_path):
+                        try:
+                            _, conf = syncnet_eval(syncnet_eval_model, syncnet_detector, validation_video_out_path, "temp")
+                        except Exception as e:
+                            logger.info(e)
+                            conf = float("nan")
+                        sync_conf_list.append(conf)
+                        plot_loss_chart(
+                            os.path.join(output_dir, f"sync_conf_results/sync_conf_chart-{global_step}.png"),
+                            ("Sync confidence", val_step_list, sync_conf_list),
+                        )
 
             logs = {"step_loss": loss.item(), "epoch": epoch}
             progress_bar.set_postfix(**logs)

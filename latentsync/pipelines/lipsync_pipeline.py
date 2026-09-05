@@ -545,7 +545,8 @@ class LipsyncPipeline(DiffusionPipeline):
             decoded_latents = self.paste_surrounding_pixels_back(
                 decoded_latents, ref_pixel_values, 1 - masks, device, weight_dtype
             )
-            synced_video_frames.append(decoded_latents)
+            # Keep the full video off CUDA; only the active chunk needs VRAM.
+            synced_video_frames.append(decoded_latents.cpu())
 
         decoded_faces = torch.cat(synced_video_frames)
         num_synced_frames = len(decoded_faces)
@@ -581,4 +582,4 @@ class LipsyncPipeline(DiffusionPipeline):
         gc.collect()
 
         if return_generated_faces:
-            return decoded_faces
+            return decoded_faces.to(device)
