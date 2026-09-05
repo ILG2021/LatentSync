@@ -16,7 +16,6 @@ import os
 import math
 import argparse
 import shutil
-import datetime
 import logging
 import re
 from pathlib import Path
@@ -188,9 +187,8 @@ def main(config):
     seed = config.run.seed + global_rank
     set_seed(seed)
 
-    # Logging folder
-    folder_name = "train" + datetime.datetime.now().strftime(f"-%Y_%m_%d-%H-%M-%S")
-    output_dir = os.path.join(config.data.train_output_dir, folder_name)
+    # Reuse the configured stage directory across launches.
+    output_dir = config.data.train_output_dir
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(

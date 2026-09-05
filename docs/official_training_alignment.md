@@ -10,7 +10,7 @@ contain weights and step counts and are published atomically to avoid auto-selec
 interrupted saves. Both stages use
 AdamW at 1e-5, 10,000,000 maximum steps, and a 10,000-step save interval.
 
-Windows single-GPU startup, valid timestamp directory names, and local dataset/cache
+Windows single-GPU startup, fixed stage output directories, and local dataset/cache
 paths are retained. The offload preset additionally wraps pixel-loss computation in
 selective saved-activation CPU offload. Standard presets do not enable offload.
 
@@ -20,7 +20,8 @@ the latest Stage 1 checkpoint and reset the stage step count. An explicit path i
 also supported. There is no optimizer-state sidecar restore, checkpoint pruning,
 within-epoch replay, or custom AMP retry loop. A restored step count does not restore
 optimizer or scheduler state. The recovery preset explicitly selects checkpoint-1000;
-Stage 1 selects `checkpoints/latentsync_unet.pt`. Each launch creates a timestamped directory.
+Stage 1 selects `checkpoints/latentsync_unet.pt`. Each launch reuses the configured
+stage output directory without a timestamp. Auto resume still searches older timestamped runs.
 
 For a controlled comparison, preserve the same input paths and checkpoint. Running
 `tools.write_fileslist` without `--skip_config_update` still changes validation paths
