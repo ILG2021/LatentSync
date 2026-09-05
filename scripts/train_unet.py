@@ -143,13 +143,22 @@ def verify_activation_offload(device, pin_memory):
 
 
 def find_latest_checkpoint(train_output_dir: str):
-    """Newest `checkpoint-*.pt` under `<train_output_dir>/<run>/checkpoints/`, or None.
+    """Newest checkpoint in a fixed run directory or legacy timestamped run, or None.
 
-    Run folders are named after their start time, so ordering by (folder name, step) is
-    deterministic and does not depend on file timestamps.
+    Fixed-layout checkpoints are preferred once present. This lets a preset migrate away from
+    timestamped run directories without accidentally resuming a newer-looking legacy folder.
     """
+    output_root = Path(train_output_dir)
+    fixed_checkpoints = []
+    for checkpoint_path in (output_root / "checkpoints").glob("checkpoint-*.pt"):
+        match = re.fullmatch(r"checkpoint-(\d+)", checkpoint_path.stem)
+        if match:
+            fixed_checkpoints.append((int(match.group(1)), checkpoint_path))
+    if fixed_checkpoints:
+        return max(fixed_checkpoints, key=lambda item: item[0])[1]
+
     checkpoints = []
-    for checkpoint_path in Path(train_output_dir).glob("*/checkpoints/checkpoint-*.pt"):
+    for checkpoint_path in output_root.glob("*/checkpoints/checkpoint-*.pt"):
         match = re.fullmatch(r"checkpoint-(\d+)", checkpoint_path.stem)
         if match:
             run_name = checkpoint_path.parent.parent.name
@@ -363,8 +372,11 @@ def main(config):
     # Logging folder
     # "%H-%M-%S" rather than "%H:%M:%S": a colon is not a legal filename character on
     # Windows, and os.makedirs below would fail with WinError 123.
-    folder_name = "train" + datetime.datetime.now().strftime("-%Y_%m_%d-%H-%M-%S")
-    output_dir = os.path.join(config.data.train_output_dir, folder_name)
+    if bool(config.data.get("timestamped_run_dir", True)):
+        folder_name = "train" + datetime.datetime.now().strftime("-%Y_%m_%d-%H-%M-%S")
+        output_dir = os.path.join(config.data.train_output_dir, folder_name)
+    else:
+        output_dir = config.data.train_output_dir
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(

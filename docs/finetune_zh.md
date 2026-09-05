@@ -320,6 +320,10 @@ checkpointing；VAE、SyncNet 和 TREPA 的 checkpointing 默认关闭，由 off
 2. 没有，用 `debug/unet/stage1/` 的最新 checkpoint，**步数清零**（新阶段）
 3. 两个都没有，报错
 
+`stage2_512_full_5090_offload.yaml` 设置了 `timestamped_run_dir: false`，重启时继续使用
+`debug/unet/stage2_512_full_5090_offload/` 固定目录，不再创建新的时间戳子目录。搜索逻辑仍
+兼容已有的旧时间戳目录；固定目录中一旦产生 checkpoint，后续会优先从固定目录续训。
+
 启动日志会说明走的哪条：
 
 ```
@@ -327,7 +331,7 @@ Resume checkpoint (resuming this stage): debug/unet/stage2/.../checkpoint-3000.p
 Resume checkpoint (initialising from the previous stage): debug/unet/stage1/.../checkpoint-11000.pt
 ```
 
-排序规则是 `(run 目录名, 步数)`——run 目录名是启动时间戳，所以先比 run 新旧再比步数，不依赖文件时间戳。
+固定目录存在 checkpoint 时按步数选择最新项；否则旧时间戳目录仍按 `(run 目录名, 步数)` 排序。
 
 ### 监控
 

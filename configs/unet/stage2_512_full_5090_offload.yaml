@@ -4,6 +4,8 @@
 data:
   syncnet_config_path: configs/syncnet/syncnet_16_pixel_attn.yaml
   train_output_dir: debug/unet/stage2_512_full_5090_offload
+  # Reuse one stable directory across restarts; checkpoint step numbers remain unique.
+  timestamped_run_dir: false
   train_fileslist: my_data/fileslist.txt
   train_data_dir: ""
   audio_embeds_cache_dir: my_data/cache/embeds
