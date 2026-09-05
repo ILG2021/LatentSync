@@ -210,6 +210,7 @@ def main(config):
     device = torch.device("cuda", local_rank)
 
     activation_cpu_offload = bool(config.run.get("activation_cpu_offload", False))
+    pixel_gradient_checkpointing = not (activation_cpu_offload and config.run.pixel_space_supervise)
     offload_pin_memory = bool(config.run.get("activation_cpu_offload_pin_memory", True))
     offload_min_mb = float(config.run.get("activation_cpu_offload_min_mb", 4))
     if not math.isfinite(offload_min_mb) or offload_min_mb <= 0:
@@ -217,6 +218,10 @@ def main(config):
     if activation_cpu_offload:
         verify_activation_offload(device, offload_pin_memory)
     logger.info("Official training flow with single-GPU adaptation; activation offload=%s", activation_cpu_offload)
+    logger.info(
+        "Gradient checkpointing: UNet=%s; pixel supervisors (VAE/SyncNet/TREPA)=%s",
+        config.run.enable_gradient_checkpointing, pixel_gradient_checkpointing,
+    )
 
     noise_scheduler = DDIMScheduler.from_pretrained("configs")
 
@@ -228,7 +233,7 @@ def main(config):
     vae.requires_grad_(False)
     vae.to(device)
 
-    if config.run.pixel_space_supervise:
+    if config.run.pixel_space_supervise and pixel_gradient_checkpointing:
         vae.enable_gradient_checkpointing()
 
     # Some distributions omit the separate official evaluation package. It is
@@ -286,7 +291,9 @@ def main(config):
         syncnet_config = OmegaConf.load(config.data.syncnet_config_path)
         if syncnet_config.ckpt.inference_ckpt_path == "":
             raise ValueError("SyncNet path is not provided")
-        syncnet = StableSyncNet(OmegaConf.to_container(syncnet_config.model), gradient_checkpointing=True).to(
+        syncnet = StableSyncNet(
+            OmegaConf.to_container(syncnet_config.model), gradient_checkpointing=pixel_gradient_checkpointing
+        ).to(
             device=device, dtype=torch.float16
         )
         syncnet_checkpoint = torch.load(
@@ -371,7 +378,7 @@ def main(config):
         lpips_loss_func = lpips.LPIPS(net="vgg").to(device)
 
     if config.run.trepa_loss_weight != 0 and config.run.pixel_space_supervise:
-        trepa_loss_func = TREPALoss(device=device, with_cp=True)
+        trepa_loss_func = TREPALoss(device=device, with_cp=pixel_gradient_checkpointing)
 
     # Validation pipeline
     pipeline = LipsyncPipeline(
