@@ -16,6 +16,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from .third_party.VideoMAEv2.utils import load_videomae_model
+from ..utils.util import check_model_and_download
 
 
 class TREPALoss:
@@ -25,6 +26,7 @@ class TREPALoss:
         ckpt_path="checkpoints/auxiliary/vit_g_hybrid_pt_1200e_ssv2_ft.pth",
         with_cp=False,
     ):
+        check_model_and_download(ckpt_path)
         self.model = load_videomae_model(device, ckpt_path, with_cp).eval().to(dtype=torch.float16)
         self.model.requires_grad_(False)
 
@@ -47,14 +49,10 @@ class TREPALoss:
         feats_fake = self.model.forward_features(videos_fake)
         feats_real = self.model.forward_features(videos_real)
 
-        # Keep the backbone in half precision, but not the loss head. A half MSE
-        # receives the weighted GradScaler seed in fp16 before applying its mean
-        # reduction, which can overflow even when the forward loss is finite.
-        # FP32 normalization also keeps its epsilon representable for zero features.
-        with torch.autocast(device_type=feats_fake.device.type, enabled=False):
-            feats_fake = F.normalize(feats_fake.float(), p=2, dim=1)
-            feats_real = F.normalize(feats_real.float(), p=2, dim=1)
-            return F.mse_loss(feats_fake, feats_real)
+        feats_fake = F.normalize(feats_fake, p=2, dim=1)
+        feats_real = F.normalize(feats_real, p=2, dim=1)
+
+        return F.mse_loss(feats_fake, feats_real)
 
 
 if __name__ == "__main__":

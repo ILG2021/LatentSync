@@ -1,11 +1,6 @@
-# Stage2 512 preset for one 32 GiB RTX 5090 on Windows.
-# Keeps SyncNet, LPIPS and TREPA enabled while explicitly offloading saved pixel-loss activations
-# to pinned system RAM. This is slower than the 256 preset, but avoids uncontrolled WDDM paging.
 data:
   syncnet_config_path: configs/syncnet/syncnet_16_pixel_attn.yaml
   train_output_dir: debug/unet/stage2_512_full_5090_offload
-  # Reuse one stable directory across restarts; checkpoint step numbers remain unique.
-  timestamped_run_dir: false
   train_fileslist: my_data/fileslist.txt
   train_data_dir: ""
   audio_embeds_cache_dir: my_data/cache/embeds
@@ -13,8 +8,8 @@ data:
 
   val_video_path: assets/demo1_video.mp4
   val_audio_path: assets/demo1_audio.wav
-  batch_size: 1
-  num_workers: 8
+  batch_size: 1 # 4
+  num_workers: 12 # 12
   num_frames: 16
   resolution: 512
   mask_image_path: latentsync/utils/mask.png
@@ -23,18 +18,19 @@ data:
   audio_feat_length: [2, 2]
 
 ckpt:
-  resume_ckpt_path: auto
-  resume_search_dir: debug/unet/stage1
-  save_ckpt_steps: 500
-  max_keep_ckpts: 4
+  resume_ckpt_path: checkpoints/latentsync_unet.pt
+  save_ckpt_steps: 10000
 
 run:
+  activation_cpu_offload: true
+  activation_cpu_offload_pin_memory: true
+  activation_cpu_offload_min_mb: 4
   pixel_space_supervise: true
   use_syncnet: true
   sync_loss_weight: 0.05
-  perceptual_loss_weight: 0.1
-  recon_loss_weight: 1
-  guidance_scale: 1.5
+  perceptual_loss_weight: 0.1 # 0.1
+  recon_loss_weight: 1 # 1
+  guidance_scale: 1.5 # [1.0 - 3.0]
   trepa_loss_weight: 10
   inference_steps: 20
   trainable_modules:
@@ -42,25 +38,10 @@ run:
     - attentions.
   seed: 1247
   use_mixed_noise: true
-  mixed_noise_alpha: 1
+  mixed_noise_alpha: 1 # 1
   mixed_precision_training: true
-  lpips_mixed_precision: true
-  # UNet checkpointing is still needed. For the frozen pixel supervisors it is faster to retain
-  # their activations through the selective CPU offload above than to recompute every block in
-  # backward. This uses more pinned system RAM but preserves the exact same losses.
   enable_gradient_checkpointing: true
-  vae_gradient_checkpointing: false
-  syncnet_gradient_checkpointing: false
-  trepa_gradient_checkpointing: false
-  activation_cpu_offload: true
-  activation_cpu_offload_pin_memory: true
-  # Four MiB also catches the per-block VideoMAE token activations. Raise to 8 only if there is
-  # clear dedicated-VRAM headroom; a higher threshold reduces PCIe traffic but retains more VRAM.
-  activation_cpu_offload_min_mb: 4
-  cudnn_benchmark: true
-  allow_tf32: true
-  log_steps: 10
-  max_train_steps: 2000
+  max_train_steps: 10000000
   max_train_epochs: -1
 
 optimizer:
@@ -95,14 +76,14 @@ model:
   downsample_padding: 1
   flip_sin_to_cos: true
   freq_shift: 0
-  in_channels: 13
+  in_channels: 13 # 49
   layers_per_block: 2
   mid_block_scale_factor: 1
   norm_eps: 1e-5
   norm_num_groups: 32
-  out_channels: 4
+  out_channels: 4 # 16
   sample_size: 64
-  resnet_time_scale_shift: default
+  resnet_time_scale_shift: default # Choose between [default, scale_shift]
 
   use_motion_module: true
   motion_module_resolutions: [1, 2, 4, 8]

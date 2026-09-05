@@ -246,16 +246,12 @@ def red_text(text: str):
     return f"{CRED}{text}{CEND}"
 
 
+log_loss = nn.BCELoss(reduction="none")
+
+
 def cosine_loss(vision_embeds, audio_embeds, y):
-    # BCE's CUDA kernel asserts when its input is even marginally outside [0, 1]. The encoders end
-    # in ReLU so similarities should be non-negative, but roundoff can still produce 1 + epsilon;
-    # malformed/early embeddings can also be negative. Compute the same Bernoulli loss explicitly
-    # after clamping valid finite similarities. NaNs remain NaNs so GradScaler can reject the step
-    # instead of a device-side assert poisoning the whole CUDA process.
-    sims = nn.functional.cosine_similarity(vision_embeds.float(), audio_embeds.float()).unsqueeze(1)
-    probabilities = sims.clamp(min=1e-7, max=1 - 1e-7)
-    targets = y.to(device=probabilities.device, dtype=probabilities.dtype)
-    return -(targets * probabilities.log() + (1 - targets) * torch.log1p(-probabilities)).squeeze()
+    sims = nn.functional.cosine_similarity(vision_embeds, audio_embeds)
+    return log_loss(sims.unsqueeze(1), y).squeeze()
 
 
 def save_image(image, save_path):

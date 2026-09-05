@@ -18,15 +18,8 @@ data:
   audio_feat_length: [2, 2]
 
 ckpt:
-  # "auto": resume this stage's own newest checkpoint under train_output_dir if there is one,
-  # otherwise start from the newest checkpoint under resume_search_dir (the previous stage).
-  # Set an explicit path to pin a specific checkpoint.
-  resume_ckpt_path: auto
-  resume_search_dir: debug/unet/stage1
-  save_ckpt_steps: 5000
-  # Keep only the newest N checkpoints. Each contains model weights plus an AdamW
-  # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
-  max_keep_ckpts: 10
+  resume_ckpt_path: checkpoints/latentsync_unet.pt
+  save_ckpt_steps: 10000
 
 run:
   pixel_space_supervise: true

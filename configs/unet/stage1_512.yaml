@@ -8,8 +8,8 @@ data:
 
   val_video_path: assets/demo1_video.mp4
   val_audio_path: assets/demo1_audio.wav
-  batch_size: 1
-  num_workers: 8
+  batch_size: 1 # 8
+  num_workers: 12 # 12
   num_frames: 16
   resolution: 512
   mask_image_path: latentsync/utils/mask.png
@@ -19,10 +19,7 @@ data:
 
 ckpt:
   resume_ckpt_path: checkpoints/latentsync_unet.pt
-  save_ckpt_steps: 5000
-  # Keep only the newest N checkpoints. Each contains model weights plus an AdamW
-  # training-state sidecar, so a long run would otherwise fill the disk. 0 keeps all.
-  max_keep_ckpts: 10
+  save_ckpt_steps: 10000
 
 run:
   pixel_space_supervise: false
@@ -38,11 +35,11 @@ run:
   mixed_noise_alpha: 1 # 1
   mixed_precision_training: true
   enable_gradient_checkpointing: true
-  max_train_steps: 10000
+  max_train_steps: 10000000
   max_train_epochs: -1
 
 optimizer:
-  lr: 5e-6
+  lr: 1e-5
   scale_lr: false
   max_grad_norm: 1.0
   lr_scheduler: constant
