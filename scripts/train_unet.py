@@ -180,6 +180,7 @@ def training_state_path(checkpoint_path):
 def save_training_state(checkpoint_path, optimizer, lr_scheduler, scaler):
     torch.save(
         {
+            "optimizer_type": f"{type(optimizer).__module__}.{type(optimizer).__qualname__}",
             "optimizer": optimizer.state_dict(),
             "lr_scheduler": lr_scheduler.state_dict(),
             "scaler": scaler.state_dict() if scaler is not None else None,
@@ -191,27 +192,39 @@ def save_training_state(checkpoint_path, optimizer, lr_scheduler, scaler):
 def load_training_state(checkpoint_path, optimizer, lr_scheduler, scaler):
     """Restore optimizer/scheduler/scaler for a genuine same-stage resume. Returns True on success.
 
-    Without this a resumed run keeps its step counter but restarts Adam from zeroed moments, which
-    shows up as a loss spike, and replays the LR schedule from step 0 -- harmless for `constant`,
-    wrong for anything with warmup or decay.
+    Missing sidecars return False. Invalid or incompatible sidecars stop training rather than
+    leaving partially restored objects in use. Legacy sidecars without optimizer identity require
+    an explicit ckpt.restore_training_state: false to restart with fresh state.
     """
     state_path = training_state_path(checkpoint_path)
     if not os.path.isfile(state_path):
         return False
 
-    # A crash partway through save_training_state leaves a truncated sidecar, and editing
-    # trainable_modules between runs makes the saved optimizer state no longer match. Neither is a
-    # reason to refuse to train: warn, and carry on with fresh optimizer state.
+    # Fail closed: a failed load may already have mutated the optimizer or scheduler.
     try:
         state = torch.load(state_path, map_location="cpu", weights_only=False)
+        expected_type = f"{type(optimizer).__module__}.{type(optimizer).__qualname__}"
+        if state.get("optimizer_type") != expected_type:
+            raise ValueError(
+                "Optimizer type is missing or incompatible. To intentionally restart with fresh "
+                "state, set ckpt.restore_training_state: false."
+            )
         optimizer.load_state_dict(state["optimizer"])
         lr_scheduler.load_state_dict(state["lr_scheduler"])
         if scaler is not None and state.get("scaler") is not None:
             scaler.load_state_dict(state["scaler"])
     except Exception as e:
-        logger.warning(f"Ignoring unusable training state {state_path}: {type(e).__name__} - {e}")
-        return False
+        raise RuntimeError(f"Cannot safely restore training state {state_path}: {e}") from e
     return True
+
+
+@torch.no_grad()
+def require_finite_weights(named_parameters, context):
+    """One host synchronization on success; identify damaged parameters on failure."""
+    checks = [(name, torch.isfinite(param).all()) for name, param in named_parameters]
+    if checks and not torch.stack([ok for _, ok in checks]).all().item():
+        bad = [name for name, ok in checks if not ok.item()]
+        raise RuntimeError(f"Non-finite weights {context}: {', '.join(bad[:20])}. Training stopped.")
 
 
 def prune_checkpoints(checkpoints_dir, max_keep):
@@ -435,6 +448,7 @@ def main(config):
     )
     if not keep_global_step:
         resume_global_step = 0
+    require_finite_weights(list(unet.named_parameters()), "in the loaded checkpoint")
 
     if config.model.add_audio_layer and config.run.use_syncnet:
         syncnet_config = OmegaConf.load(config.data.syncnet_config_path)
@@ -466,6 +480,7 @@ def main(config):
         trainable_params = list(unet.parameters())
 
     optimizer, optimizer_name = build_optimizer(config, trainable_params)
+    trainable_named_params = [(name, p) for name, p in unet.named_parameters() if p.requires_grad]
 
     logger.info(f"trainable params number: {len(trainable_params)}")
     logger.info(f"trainable params scale: {sum(p.numel() for p in trainable_params) / 1e6:.3f} M")
@@ -572,7 +587,9 @@ def main(config):
         )
     # Only for a genuine same-stage resume. Starting a new stage reuses the previous stage's weights
     # but has a different trainable parameter set, so its optimizer state does not apply.
-    if keep_global_step and resume_global_step > 0:
+    if not config.ckpt.get("restore_training_state", True):
+        logger.warning("Training state restore explicitly disabled; using fresh optimizer, scheduler and scaler.")
+    elif keep_global_step and resume_global_step > 0:
         if load_training_state(resume_ckpt_path, optimizer, lr_scheduler, scaler):
             logger.info(f"Restored optimizer/scheduler state from {training_state_path(resume_ckpt_path)}")
         else:
@@ -784,21 +801,32 @@ def main(config):
                     + trepa_loss * config.run.trepa_loss_weight
                 )
 
-            # Backpropagate
+            # Stop at the first invalid loss/gradient rather than silently advancing checkpoints.
+            if not torch.isfinite(loss.detach()).all().item():
+                raise RuntimeError(f"Non-finite loss before update {global_step + 1}; weights were not updated.")
             if config.run.mixed_precision_training:
                 scaler.scale(loss).backward()
                 """ >>> gradient clipping >>> """
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(trainable_params, config.optimizer.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
+                )
                 """ <<< gradient clipping <<< """
+                previous_scale = scaler.get_scale()
                 scaler.step(optimizer)
                 scaler.update()
+                if scaler.get_scale() < previous_scale:
+                    raise RuntimeError("AMP skipped the optimizer update; training stopped without advancing global_step.")
             else:
                 loss.backward()
                 """ >>> gradient clipping >>> """
-                torch.nn.utils.clip_grad_norm_(trainable_params, config.optimizer.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, config.optimizer.max_grad_norm, error_if_nonfinite=True
+                )
                 """ <<< gradient clipping <<< """
                 optimizer.step()
+
+            require_finite_weights(trainable_named_params, f"after optimizer update {global_step + 1}")
 
             # Check the grad of attn blocks for debugging
             # print(unet.up_blocks[3].attentions[2].transformer_blocks[0].attn2.to_q.weight.grad)
@@ -815,6 +843,9 @@ def main(config):
                 step_seconds = (time.perf_counter() - perf_window_start) / perf_window_steps
                 loss_value = float(loss.detach())
                 writer.add_scalar("train/loss", loss_value, global_step)
+                writer.add_scalar("train/grad_norm", float(grad_norm), global_step)
+                if scaler is not None:
+                    writer.add_scalar("train/grad_scale", scaler.get_scale(), global_step)
                 writer.add_scalar("train/reconstruction_loss", float(recon_loss), global_step)
                 writer.add_scalar("train/sync_loss", float(sync_loss), global_step)
                 writer.add_scalar("train/perceptual_loss", float(lpips_loss), global_step)
@@ -845,6 +876,7 @@ def main(config):
             # Save checkpoint and conduct validation
             if global_step % config.ckpt.save_ckpt_steps == 0:
                 maintenance_started_at = time.perf_counter()
+                require_finite_weights(list(unet.named_parameters()), f"before checkpoint {global_step}")
                 model_save_path = os.path.join(output_dir, f"checkpoints/checkpoint-{global_step}.pt")
                 state_dict = {
                     "global_step": global_step,
@@ -854,14 +886,14 @@ def main(config):
                     torch.save(state_dict, model_save_path)
                     logger.info(f"Saved checkpoint to {model_save_path}")
                 except Exception as e:
-                    logger.error(f"Error saving model: {e}")
+                    raise RuntimeError(f"Error saving model; checkpoint pruning cancelled: {e}") from e
 
                 # Separate from the weights save: the sidecar is only needed to resume, so losing
                 # it (a full disk, most likely) must not be reported as having lost the checkpoint.
                 try:
                     save_training_state(model_save_path, optimizer, lr_scheduler, scaler)
                 except Exception as e:
-                    logger.error(f"Error saving training state (checkpoint itself is fine): {e}")
+                    raise RuntimeError(f"Error saving training state; checkpoint pruning cancelled: {e}") from e
 
                 try:
                     removed = prune_checkpoints(
