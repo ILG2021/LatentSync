@@ -65,6 +65,12 @@ def create_args(
     parser.add_argument("--video_path", type=str, required=True)
     parser.add_argument("--audio_path", type=str, required=True)
     parser.add_argument("--video_out_path", type=str, required=True)
+    parser.add_argument(
+        "--start_time",
+        type=float,
+        default=0.0,
+        help="Start reading the input video at this time in seconds; audio still starts at 0.",
+    )
     parser.add_argument("--inference_steps", type=int, default=20)
     parser.add_argument("--guidance_scale", type=float, default=1.5)
     parser.add_argument("--temp_dir", type=str, default="temp")
